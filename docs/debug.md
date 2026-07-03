@@ -2,6 +2,15 @@
 
 调试时反复跑同一 flow,run 模式每次换 `job_id`、产物不复用,缺上游产物就中断。debug 模式把产物固定到一个目录,artifact 持久化到磁盘,重跑时已完成节点跳过、单调试复用上游。
 
+正式定点续跑不走 debug。需要人工修正产物后继续跑时,使用 `run --out DIR --from NODE`:
+
+```bash
+easyflow run ./my_flow --out ./runs/video-a
+easyflow run ./my_flow --out ./runs/video-a --from translate
+```
+
+`--from translate` 会复用 `DIR` 中 translate 上游节点的 `artifact.json`,清理 translate 及下游旧产物,然后从 translate 跑到末端。
+
 ## 与 run 的区别
 
 |              | run                                                   | debug                                      |

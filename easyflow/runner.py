@@ -106,6 +106,7 @@ class Runner:
         node_classes: dict[str, type[Node]],
         output_root: Path = DEFAULT_OUTPUT_ROOT,
         debug: bool = False,
+        job_dir: Path | None = None,
     ) -> None:
         self.flow = flow
         self.steps = steps
@@ -121,9 +122,13 @@ class Runner:
         # 产物持久化:每节点 output_dir = job_dir / <step_id>,节点自己写文件
         # debug 模式:job_dir 固定(无 job_id),产物累积,artifact 持久化供单调试复用上游
         self.debug = debug
+        self._explicit_job_dir = job_dir is not None
+        self._persist_artifacts = debug or self._explicit_job_dir
         self.output_root = output_root
         self.job_id = _gen_job_id()
-        if debug:
+        if job_dir is not None:
+            self.job_dir = Path(job_dir)
+        elif debug:
             self.job_dir = DEBUG_OUTPUT_ROOT / flow.id
         else:
             self.job_dir = output_root / flow.id / self.job_id
@@ -136,10 +141,22 @@ class Runner:
 
     @classmethod
     def load(
-        cls, flow_dir: str, output_root: Path = DEFAULT_OUTPUT_ROOT, debug: bool = False
+        cls,
+        flow_dir: str,
+        output_root: Path = DEFAULT_OUTPUT_ROOT,
+        debug: bool = False,
+        job_dir: Path | str | None = None,
     ) -> "Runner":
         flow, steps, node_classes = load_flow(flow_dir)
-        return cls(flow, steps, node_classes, output_root=output_root, debug=debug)
+        resolved_job_dir = Path(job_dir) if job_dir is not None else None
+        return cls(
+            flow,
+            steps,
+            node_classes,
+            output_root=output_root,
+            debug=debug,
+            job_dir=resolved_job_dir,
+        )
 
     def clear_debug(self) -> None:
         """debug 模式:清空 job_dir 下持久化产物,下次 run 从头跑。非 debug 无操作。"""
@@ -147,22 +164,9 @@ class Runner:
             return
         shutil.rmtree(self.job_dir, ignore_errors=True)
 
-    def missing_upstream(self, target: set[str]) -> list[str]:
-        """debug 单点调试预检:target 节点的全部上游中,缺 artifact.json 的 id 列表。
-        cmd_debug 用它判断是否该提示用户先全跑,而非静默打开 view 后无节点可跑。"""
-        required = set()
-        for x in target:
-            required |= self._required({x})
-        required -= target
-        return [
-            sid for sid in required
-            if not (self.job_dir / sid / _ARTIFACT_FILE).exists()
-        ]
-
     def missing_upstream(self, scope: set[str]) -> list[str]:
-        """返回 scope 节点的所有上游中磁盘无 artifact.json 的节点 id 列表。
-        scope 单点调试前调用,缺失则上游无法复用,提示用户先全跑落产物。"""
-        if not self.debug:
+        """返回 scope 节点的所有上游中磁盘无 artifact.json 的节点 id 列表。"""
+        if not self._persist_artifacts:
             return []
         needed: set[str] = set()
         frontier: set[str] = set(scope)
@@ -197,9 +201,9 @@ class Runner:
         return depth
 
     def _persist_artifact(self, sid: str, artifact: Any) -> None:
-        """debug 模式:节点 done/skipped 后把 artifact 序列化到 output_dir/artifact.json。
+        """持久化模式:节点 done/skipped 后把 artifact 序列化到 output_dir/artifact.json。
         Path 等非 JSON 类型用 default=str 兜底;FanOut 不持久化(动态扩图指令非产物)。"""
-        if not self.debug:
+        if not self._persist_artifacts:
             return
         out = self.job_dir / sid
         out.mkdir(parents=True, exist_ok=True)
@@ -209,10 +213,10 @@ class Runner:
         )
 
     def _load_persisted_artifacts(self, skip: set[str] | None = None) -> None:
-        """debug 模式:启动时扫描 job_dir/<sid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
+        """持久化模式:启动时扫描 job_dir/<sid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
         已完成节点被 _ready_nodes 自然跳过,单调试时上游产物直接复用,不重跑。
         skip 内的节点不加载(强制重跑)——scope 单点调试时跳过目标节点本身。"""
-        if not self.debug or not self.job_dir.exists():
+        if not self._persist_artifacts or not self.job_dir.exists():
             return
         skip = skip or set()
         for sid in self.steps:
@@ -229,6 +233,19 @@ class Runner:
             st = self.state.steps.setdefault(sid, StepState(step_id=sid))
             st.status = "skipped" if artifact is None else "done"
             st.artifact = artifact
+
+    def _invalidate_steps(self, scope: set[str]) -> None:
+        """清掉本次要重跑节点的内存状态与磁盘产物。"""
+        for sid in scope:
+            self.artifacts.pop(sid, None)
+            st = self.state.steps.get(sid)
+            if st:
+                st.status = "idle"
+                st.artifact = None
+                st.detail = ""
+                st.text = ""
+            if self._persist_artifacts:
+                shutil.rmtree(self.job_dir / sid, ignore_errors=True)
 
     def _all_edges(self) -> list[Edge]:
         """静态边 + 运行时动态扩图改写的 self.flow.edges。"""
@@ -426,16 +443,25 @@ class Runner:
         only: set[str] | None = None,
         break_before: set[str] | None = None,
         scope: set[str] | None = None,
+        from_steps: set[str] | None = None,
     ) -> AsyncGenerator[WorkflowJobEvent, None]:
         """执行 flow,产出事件流。
 
         only 指定时只跑 only 及其必需上游(单调试,run 模式用,无持久化必须跑上游)。
         scope 指定时 _target 限定为 scope 本身(不含上游),上游必须已完成否则 scope
         节点不就绪——debug --node 用,上游从磁盘加载产物,只反复跑指定节点。
+        from_steps 指定时只重跑这些节点及下游,上游从 job_dir artifact.json 复用。
         break_before 指定时,这些节点就绪后不立即执行,先 emit checkpoint 暂停,
         等 resume 信号才转 idle 重新就绪执行——用于 view 在指定节点前停下来观察。
         """
-        if scope is not None:
+        if from_steps is not None:
+            if not self._persist_artifacts:
+                raise RuntimeError("from_steps 需要可复用的 artifact 目录")
+            target: set[str] = set()
+            for sid in from_steps:
+                target |= self._downstream(sid)
+            self._target = target
+        elif scope is not None:
             self._target = set(scope)
         elif only is not None:
             self._target = self._required(only)
@@ -446,9 +472,20 @@ class Runner:
         for sid in self.steps:
             if sid not in self.state.steps:
                 self.state.steps[sid] = StepState(step_id=sid)
-        # debug 模式:加载上次持久化产物,已完成节点跳过,单调试复用上游
+        self.state.status = "running"
+        self.state.finished = False
+        # 持久化模式:加载上次持久化产物,已完成节点跳过,单调试/续跑复用上游
         # scope 模式:scope 内节点不加载产物,强制重跑(单点调试反复执行 X)
-        self._load_persisted_artifacts(skip=self._target if scope is not None else None)
+        # from_steps 模式:目标闭包不加载,并清理旧产物,强制重跑本节点及下游
+        if from_steps is not None:
+            self._load_persisted_artifacts(skip=self._target)
+            self._invalidate_steps(self._target or set())
+        elif scope is not None:
+            self._load_persisted_artifacts(skip=self._target)
+        elif self._explicit_job_dir:
+            self._invalidate_steps(set(self.steps))
+        else:
+            self._load_persisted_artifacts()
 
         while True:
             if self._aborted:

@@ -10,6 +10,9 @@ from easyflow.cli import cmd_debug, cmd_new, main
 from easyflow.runner import Runner
 
 
+OCR_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "ocr_flow"
+
+
 def _debug_root(monkeypatch, tmp_path: Path) -> Path:
     root = tmp_path / "debug_root"
     monkeypatch.setattr(runner_mod, "DEBUG_OUTPUT_ROOT", root)
@@ -39,7 +42,8 @@ def test_new_generates_runnable_template(tmp_path: Path, monkeypatch) -> None:
 
     asyncio.run(drive())
     assert runner.state.status == "done"
-    assert runner.artifacts["report"]["report"] == "共 3 项,合计 6"
+    assert "html 大小" in runner.artifacts["report"]["summary"]
+    assert (Path(runner.artifacts["report"]["report_path"])).exists()
 
 
 def test_new_refuses_existing(tmp_path: Path, monkeypatch) -> None:
@@ -88,3 +92,21 @@ def test_debug_node_refuses_when_upstream_missing(tmp_path: Path, monkeypatch, c
     err = capsys.readouterr().err
     assert "上游产物缺失" in err
     assert "easyflow debug" in err
+
+
+def test_run_from_requires_out(capsys) -> None:
+    """run --from 必须指定 --out,否则无法复用上游产物。"""
+    rc = main(["run", str(OCR_EXAMPLE), "--from", "ocr"])
+
+    assert rc == 1
+    assert "--from 需要同时指定 --out" in capsys.readouterr().err
+
+
+def test_run_from_refuses_when_upstream_missing(tmp_path: Path, capsys) -> None:
+    """run --from X 上游产物缺失时提前失败,不启动节点执行。"""
+    rc = main(["run", str(OCR_EXAMPLE), "--out", str(tmp_path / "out"), "--from", "ocr"])
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "上游产物缺失" in err
+    assert "easyflow run" in err

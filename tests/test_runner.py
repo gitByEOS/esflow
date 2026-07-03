@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
 
+import easyflow.runner as runner_mod
 from easyflow import Runner, Checkpoint
 from easyflow.event import WorkflowJobEvent
 from easyflow.loader import load_flow, FlowLoadError
 
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
+OCR_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "ocr_flow"
+ARTIFACT_FILE = runner_mod._ARTIFACT_FILE
 
 
 def _track_calls(runner: Runner) -> list[str]:
@@ -33,12 +37,53 @@ def _track_calls(runner: Runner) -> list[str]:
     return calls
 
 
+def _stub_ocr_flow(runner: Runner) -> list[str]:
+    """把 ocr_flow 节点替换成无外部依赖的轻量实现。"""
+    calls: list[str] = []
+
+    def wrap(sd):
+        def fake(ctx):
+            calls.append(sd.id)
+            if sd.id == "ingest":
+                return {"image_path": "raw.png"}
+            if sd.id == "preprocess":
+                return {"image_path": ctx.get("ingest")["image_path"]}
+            if sd.id == "ocr":
+                return {"text": f"识别:{ctx.get('preprocess')['image_path']}"}
+            if sd.id == "export":
+                text = ctx.get("ocr")["text"]
+                path = sd.node.output_dir / "result.txt"
+                path.write_text(text + "\n", encoding="utf-8")
+                return {"out_path": str(path), "chars": len(text)}
+            return {}
+
+        sd.node.run = fake
+
+    for sd in runner.steps.values():
+        wrap(sd)
+    return calls
+
+
 def _collect_events(runner: Runner, only: set[str] | None = None) -> list[WorkflowJobEvent]:
     """同步跑完 runner(自动 resume checkpoint),返回事件列表。"""
     events: list[WorkflowJobEvent] = []
 
     async def drive():
         async for ev in runner.run(only=only):
+            events.append(ev)
+            if ev.type == "checkpoint":
+                runner.resume()
+
+    asyncio.run(drive())
+    return events
+
+
+def _collect_events_from(runner: Runner, from_steps: set[str]) -> list[WorkflowJobEvent]:
+    """同步跑 from_steps 续跑流程,返回事件列表。"""
+    events: list[WorkflowJobEvent] = []
+
+    async def drive():
+        async for ev in runner.run(from_steps=from_steps):
             events.append(ev)
             if ev.type == "checkpoint":
                 runner.resume()
@@ -66,6 +111,40 @@ def test_run_full_flow_with_auto_resume():
     assert calls == ["fetch", "process", "review", "export"]
     assert all(s.status == "done" for s in runner.state.steps.values())
     assert runner.artifacts["export"]["exported"] is True
+
+
+def test_run_from_reuses_out_dir_upstream_artifacts(tmp_path: Path):
+    """用 ocr_flow 验证:人工修正 preprocess 产物后,只从 ocr 续跑到 export。"""
+    out_dir = tmp_path / "ocr_run"
+
+    first = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
+    first_calls = _stub_ocr_flow(first)
+    _collect_events(first)
+    assert first_calls == ["ingest", "preprocess", "ocr", "export"]
+    assert (out_dir / "preprocess" / ARTIFACT_FILE).exists()
+
+    fixed_preprocess = {"image_path": "fixed.png"}
+    (out_dir / "preprocess" / ARTIFACT_FILE).write_text(
+        json.dumps(fixed_preprocess, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    stale_file = out_dir / "export" / "stale.txt"
+    stale_file.write_text("旧产物", encoding="utf-8")
+
+    second = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
+    second_calls = _stub_ocr_flow(second)
+    events = _collect_events_from(second, {"ocr"})
+
+    assert events[-1].type == "end"
+    assert second_calls == ["ocr", "export"]
+    assert second.artifacts["preprocess"] == fixed_preprocess
+    assert second.artifacts["ocr"]["text"] == "识别:fixed.png"
+    assert not stale_file.exists()
+
+    ocr_artifact = json.loads((out_dir / "ocr" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    export_artifact = json.loads((out_dir / "export" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    assert ocr_artifact["text"] == "识别:fixed.png"
+    assert export_artifact["chars"] == len("识别:fixed.png")
 
 
 def test_retry_reuses_upstream_artifacts():

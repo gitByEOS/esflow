@@ -19,6 +19,7 @@
 | skip 兜底链 | 上游有产物则 skip 当前,无产物则当前接手兜底 |
 | 人机协作 | `checkpoint=AFTER` 暂停 job,等 `resume` / `retry` / `abort` |
 | retry 复用上游 | 已完成且无依赖变更的上游 artifact 复用,不重跑 |
+| 定点续跑 | `run --out DIR --from NODE` 复用上游产物,只重跑指定节点及下游 |
 | 单节点调试 | `--node worker#2` 只跑指定节点及其必需上游 |
 | 统一事件流 | `WorkflowJobEvent` 折叠成 `JobState` 供视图消费 |
 | 库 + CLI 双入口 | `async for event in runner.run()` 为主,CLI 调试 |
@@ -35,6 +36,8 @@ pip install easyflow
 ```bash
 easyflow new my_skill                  # 生成 skill 模板(含可跑 demo flow)
 easyflow run ./my_flow                  # 全跑,checkpoint 时 stdin 等命令
+easyflow run ./my_flow --out ./runs/a   # 产物写入固定目录,生成可续跑 artifact
+easyflow run ./my_flow --out ./runs/a --from translate  # 从 translate 续跑到末端
 easyflow run ./my_flow --node worker#2  # 单节点调试:只跑指定节点及其上游
 easyflow debug ./my_flow                # 调出 view 调试界面,产物固定到 /tmp/easyflow/debug/<flow_id>/
 easyflow debug ./my_flow --node worker#2  # 单点调试:上游从磁盘复用,在节点前暂停等 resume
@@ -43,6 +46,8 @@ easyflow view ./my_flow                 # 浏览器调试界面(非 debug,产物
 ```
 
 checkpoint 时 stdin 命令:`resume` / `retry <step>` / `abort`。
+
+人工修正某个节点产物后,从它的下一步继续跑:先用 `--out` 固定产物目录,再用 `--from` 指定重跑起点。若只是修改 artifact 指向的文件内容,不必改 `artifact.json`;若换了文件路径,同步修改对应节点的 `artifact.json`。
 
 debug 与 run 的区别、产物路径策略、artifact 持久化与复用见 [docs/debug.md](docs/debug.md)。
 

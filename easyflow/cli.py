@@ -2,6 +2,8 @@
 
     easyflow new my_skill                       # 生成 skill 模板(含可跑 demo flow)
     easyflow run ./my_flow                      # 全跑,checkpoint 时 stdin 等命令
+    easyflow run ./my_flow --out ./runs/a       # 产物写入指定目录,用于后续续跑
+    easyflow run ./my_flow --out ./runs/a --from translate  # 从指定节点续跑到末端
     easyflow run ./my_flow --node worker#2      # 单调试指定副本及其上游
     easyflow debug ./my_flow                    # 调试模式:产物固定到 /tmp/easyflow/debug/<flow_id>/,持久化 artifact
     easyflow debug ./my_flow --node worker#2    # 单调试复用上游持久化产物,只跑指定节点
@@ -20,9 +22,14 @@ from .event import easyflow_event
 from .runner import Runner
 
 
-async def _run_cli(flow_dir: str, only: set[str] | None) -> int:
-    runner = Runner.load(flow_dir)
-    async for event in runner.run(only=only):
+async def _run_cli(
+    flow_dir: str,
+    only: set[str] | None,
+    out: str | None = None,
+    from_steps: set[str] | None = None,
+) -> int:
+    runner = Runner.load(flow_dir, job_dir=Path(out) if out else None)
+    async for event in runner.run(only=only, from_steps=from_steps):
         easyflow_event(event)
         if event.type == "checkpoint":
             print("输入 resume / retry <step> / abort:", end=" ", flush=True)
@@ -47,7 +54,25 @@ async def _run_cli(flow_dir: str, only: set[str] | None) -> int:
 
 def cmd_run(args) -> int:
     only = set(args.node) if args.node else None
-    return asyncio.run(_run_cli(args.flow_dir, only))
+    from_steps = set(args.from_steps) if args.from_steps else None
+    if from_steps and not args.out:
+        print("--from 需要同时指定 --out", file=sys.stderr)
+        return 1
+    if from_steps:
+        pre = Runner.load(args.flow_dir, job_dir=Path(args.out))
+        unknown = sorted(sid for sid in from_steps if sid not in pre.steps)
+        if unknown:
+            print(f"未知节点:{' '.join(unknown)}", file=sys.stderr)
+            return 1
+        missing = pre.missing_upstream(from_steps)
+        if missing:
+            print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
+            print(
+                f"先全跑落产物:easyflow run {args.flow_dir} --out {args.out}",
+                file=sys.stderr,
+            )
+            return 1
+    return asyncio.run(_run_cli(args.flow_dir, only, args.out, from_steps))
 
 
 def cmd_debug(args) -> int:
@@ -271,14 +296,29 @@ def main(argv: list[str] | None = None) -> int:
     p_new.add_argument("name", help="skill 目录名")
     p_new.set_defaults(func=cmd_new)
 
-    p_run = sub.add_parser("run", help="跑 flow;传 --node 则只跑指定节点及其上游")
+    p_run = sub.add_parser("run", help="跑 flow;支持指定产物目录与定点续跑")
     p_run.add_argument("flow_dir", help="flow 目录路径")
-    p_run.add_argument(
+    run_scope = p_run.add_mutually_exclusive_group()
+    run_scope.add_argument(
         "--node", "-n",
         nargs="+",
         default=None,
         metavar="NODE",
         help="只跑指定节点及其上游(空格分隔多个)",
+    )
+    run_scope.add_argument(
+        "--from",
+        dest="from_steps",
+        nargs="+",
+        default=None,
+        metavar="NODE",
+        help="从指定节点续跑到末端,上游从 --out 目录复用",
+    )
+    p_run.add_argument(
+        "--out",
+        default=None,
+        metavar="DIR",
+        help="指定完整产物目录,节点产物写入 DIR/<node>/",
     )
     p_run.set_defaults(func=cmd_run)
 
