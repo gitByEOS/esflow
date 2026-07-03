@@ -18,8 +18,18 @@ flow.py 声明 DAG 的边、静态并行度、动态扇出 base:
         edges = [edge("ingest","split"), edge("split","worker"), edge("worker","merge")]
         dynamic = {"worker"}   # worker 由 FanOut 运行时实例化,loader 不预创建
 
+    # 同层依次启动:worker_a / worker_b 同依赖 decide(DAG 同层),
+    # 但 serial 集合让 runner 同轮只启动 nodes 顺序靠前的那个,另一个等下一轮
+    @flow(id="fallback")
+    class FallbackFlow:
+        nodes = ["decide", "worker_a", "worker_b", "merge"]
+        edges = [edge("decide","worker_a"), edge("decide","worker_b"),
+                 edge("worker_a","merge"), edge("worker_b","merge")]
+        serial = {"worker_a", "worker_b"}   # 同层依次启动,不并行 gather
+
 replicas 的 base loader 期展开为 base#0..N-1,边扇出/扇入。
 dynamic 的 base loader 不实例化,运行时由某节点 run 返回 FanOut 创建副本。
+serial 的 base 同层就绪时按 nodes 顺序只启动第一个,其他等下一轮(保留并行能力,非 serial 节点照常并行)。
 """
 
 from __future__ import annotations
@@ -57,6 +67,7 @@ class FlowDefine:
     edges: Edge 列表(静态边,动态 base 的边运行时由 runner 扩展)。
     replicas: 静态并行度,loader 期展开。
     dynamic: 动态扇出 base 集合,运行时由 FanOut 创建,loader 不预实例化。
+    serial: 同层依次启动的 base 集合,runner 同轮只启动 nodes 顺序最靠前的那个 serial 节点。
     """
 
     id: str
@@ -65,6 +76,7 @@ class FlowDefine:
     edges: list[Edge] = field(default_factory=list)
     replicas: dict[str, int] = field(default_factory=dict)
     dynamic: set[str] = field(default_factory=set)
+    serial: set[str] = field(default_factory=set)
 
 
 def flow(id: str, title: str = "") -> Callable:
@@ -75,6 +87,7 @@ def flow(id: str, title: str = "") -> Callable:
         edges = list(getattr(cls, "edges", []))
         replicas = dict(getattr(cls, "replicas", {}))
         dynamic = set(getattr(cls, "dynamic", set()))
+        serial = set(getattr(cls, "serial", set()))
         return FlowDefine(
             id=id,
             title=title or id,
@@ -82,6 +95,7 @@ def flow(id: str, title: str = "") -> Callable:
             edges=edges,
             replicas=replicas,
             dynamic=dynamic,
+            serial=serial,
         )
 
     return decorator

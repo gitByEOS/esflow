@@ -121,12 +121,15 @@ def test_split_accept_failure(tmp_path: Path):
     )
     runner = Runner.load(str(d))
     events = _events(runner)
+    # split accept False → 被 skip,不扇出,job 正常完成
     assert any(
-        e.type == "error" and "接手确认失败" in (e.message or "") and e.step_id == "split"
+        e.type == "trace" and e.status == "skipped" and e.step_id == "split"
         for e in events
     )
+    assert runner.state.steps["split"].status == "skipped"
     # 未扇出
     assert not any(sid.startswith("w#") for sid in runner.state.steps)
+    assert runner.state.status == "done"
 
 
 def test_replicas_dynamic_overlap_rejected(tmp_path: Path):

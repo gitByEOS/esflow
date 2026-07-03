@@ -8,16 +8,18 @@
         id = "gen_srt"
         checkpoint = Checkpoint.AFTER
 
-        def accept(self, ctx) -> bool:          # 接手确认,可选
+        def accept(self, ctx) -> bool:          # 接手确认,可选;返回 False → 跳过本节点
             return Path(ctx.get("fetch")["video"]).exists()
 
-        def deliver(self, artifact) -> bool:    # 脱手确认,可选
+        def deliver(self, artifact) -> bool:    # 脱手确认,可选;返回 False → emit error
             return Path(artifact["srt"]).exists()
 
         def run(self, ctx) -> dict:             # 必须实现
             ...
             return {"srt": srt_path}
 
+accept 返回 False 不是错误,而是"不接手":框架 emit skipped,artifact 置 None,
+下游可推进,通过 ctx.get 拿到 None 知道上游被跳过。deliver 失败才是错误。
 accept/deliver 默认返回 True,子类按需 override。
 副本运行时 index/replica_id 由 runner 注入实例。
 
@@ -45,6 +47,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Protocol
 
 
@@ -77,6 +80,8 @@ class StepContext(Protocol):
     ctx.get(upstream_id) 取上游节点已完成的 artifact。
     ctx.upstream_ids() 取所有已完成的上游 node id(扇入节点枚举各副本用)。
     ctx.gather(base_id) 收集某动态 base 的所有副本产物(按 index 排序)。
+    ctx.layer(depth) 取该拓扑深度的所有已完成节点产物 list(按声明顺序,skip 的为 None),
+        同层 fallback 用 ctx.layer(self.depth) 拿前序,跨层拿上游用 ctx.layer(self.depth - 1)。
     动态副本额外有 ctx.fanout_payload(框架注入的第 i 份数据)。
     副本节点额外有 index(副本序号)和 replica_id(实例 id)。
     """
@@ -86,6 +91,8 @@ class StepContext(Protocol):
     def upstream_ids(self) -> list[str]: ...
 
     def gather(self, base_id: str) -> list[Any]: ...
+
+    def layer(self, depth: int) -> list[Any]: ...
 
     fanout_payload: Any
 
@@ -99,9 +106,13 @@ class Node:
     # 副本运行时由 loader 注入(非副本节点 index=0, replica_id=id)
     index: int = 0
     replica_id: str = ""
+    # 拓扑深度(从入口节点 0 起),框架注入;同层节点 depth 相同,serial 同层依次启动
+    depth: int = 0
+    # 产物目录,框架注入;节点把大文件写到这里,run 返回的 dict 登记文件路径供下游读取
+    output_dir: Path = Path()
 
     def accept(self, ctx: StepContext) -> bool:
-        """接手确认:run 前校验前置条件。默认通过。"""
+        """接手确认:run 前校验前置条件。返回 False → 跳过本节点(emit skipped,artifact None)。默认通过。"""
         return True
 
     def deliver(self, artifact: Any) -> bool:
@@ -121,16 +132,21 @@ class StepDefine:
     title: str
     checkpoint: Checkpoint
     node: Node
+    depth: int = 0
 
 
-def _instantiate(node_cls: type[Node], replica_id: str, index: int) -> StepDefine:
-    """实例化一个 Node 子类为 StepDefine,注入副本信息。"""
+def _instantiate(
+    node_cls: type[Node], replica_id: str, index: int, depth: int = 0
+) -> StepDefine:
+    """实例化一个 Node 子类为 StepDefine,注入副本信息与拓扑深度。"""
     node = node_cls()
     node.replica_id = replica_id
     node.index = index
+    node.depth = depth
     return StepDefine(
         id=replica_id,
         title=node.title or node_cls.id,
         checkpoint=node.checkpoint,
         node=node,
+        depth=depth,
     )

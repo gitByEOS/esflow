@@ -151,7 +151,10 @@ def load_flow(
     for base in flow.dynamic:
         if base not in node_classes:
             raise FlowLoadError(f"dynamic 引用了未定义的节点:{base}")
-    # 同一 base 不能既静态副本又动态扇出
+    for base in flow.serial:
+        if base not in node_classes:
+            raise FlowLoadError(f"serial 引用了未定义的节点:{base}")
+    # 同一 base 不能同时静态副本和动态扇出
     overlap = set(flow.replicas) & flow.dynamic
     if overlap:
         raise FlowLoadError(f"base 不能同时声明 replicas 和 dynamic:{overlap}")
@@ -188,6 +191,7 @@ def load_flow(
         edges=expanded_edges,
         replicas={},  # 展开后不再有静态副本概念
         dynamic=flow.dynamic,  # 保留,runner 要用
+        serial={rid for base in flow.serial for rid in _expand_ids(base, flow.replicas)},
     )
 
     # 无环校验:动态 base 以 base id 参与(运行时才展开成副本)

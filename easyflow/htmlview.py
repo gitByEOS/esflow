@@ -87,12 +87,27 @@ def _template_title(runner: Runner, sid: str) -> str:
     return getattr(cls, "title", None) or getattr(cls, "id", sid) or sid
 
 
+def _artifact_files(runner: Runner, sid: str) -> list[tuple[str, str]]:
+    """从节点 artifact dict 里提取产物 (文件名, 完整路径),值是 output_dir 下的路径。"""
+    if sid not in runner.steps:
+        return []
+    st = runner.state.steps.get(sid)
+    if not st or not isinstance(st.artifact, dict):
+        return []
+    output_dir = str(runner.steps[sid].node.output_dir)
+    return [
+        (v.rsplit("/", 1)[-1], v)
+        for v in st.artifact.values()
+        if isinstance(v, str) and v.startswith(output_dir)
+    ]
+
+
 def _svg_dag(runner: Runner) -> str:
-    """渲染 DAG 为 SVG,节点矩形 + 箭头 + 状态色块。"""
+    """渲染 DAG 为 SVG,节点矩形 + 箭头 + 状态色块;有产物的节点下方挂产物文件名。"""
     node_ids = _dag_node_ids(runner)
     edges = [(e.from_, e.to) for e in runner.flow.edges]
     pos = _layered_layout(node_ids, edges)
-    node_w, node_h, gap_x, gap_y, pad = 160, 44, 60, 24, 40
+    node_w, node_h, gap_x, gap_y, pad = 180, 44, 60, 30, 40
     # 计算每层节点数定画布
     max_row = max((r for _, r in pos.values()), default=0)
     max_col = max((c for c, _ in pos.values()), default=0)
@@ -143,15 +158,28 @@ def _svg_dag(runner: Runner) -> str:
             color = _STATUS_COLOR["idle"]
             title = _template_title(runner, sid)
         x, y = xy(sid)
-        label = sid if len(sid) <= 14 else sid[:13] + "…"
         parts.append(
             f'<g class="node" data-id="{sid}">'
             f'<rect x="{x}" y="{y}" width="{node_w}" height="{node_h}" rx="6" '
             f'fill="{color}" stroke="#1f2937" stroke-width="1.5"/>'
-            f'<text x="{x + 8}" y="{y + 18}" fill="#fff" font-size="13" font-weight="600">{label}</text>'
-            f'<text x="{x + 8}" y="{y + 34}" fill="#e5e7eb" font-size="11">{st.status} · {title[:10]}</text>'
+            f'<text x="{x + 8}" y="{y + 18}" fill="#fff" font-size="13" font-weight="600">{sid}</text>'
+            f'<text x="{x + 8}" y="{y + 34}" fill="#e5e7eb" font-size="11">{st.status} · {title}</text>'
             f'</g>'
         )
+        # 产物文件名挂在节点矩形下方,SVG file 图标 + 文件名,整组可点击复制完整路径
+        files = _artifact_files(runner, sid)
+        fx = x + 4
+        icon_y = y + node_h + 4
+        for fname, fpath in files:
+            parts.append(
+                f'<g class="artifact-link" data-path="{fpath}" '
+                f'transform="translate({fx},{icon_y})">'
+                f'<path d="M1,1 h6 l2,2 v8 h-8 z M7,1 v2 h2" '
+                f'stroke="#fcd34d" fill="none" stroke-width="1" stroke-linejoin="round"/>'
+                f'<text x="13" y="9" fill="#fcd34d" font-size="10" font-family="monospace">{fname}</text>'
+                f'</g>'
+            )
+            fx += len(fname) * 6 + 30
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -240,6 +268,17 @@ _HTML = textwrap.dedent("""\
   #nodes-list .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
   #nodes-list .id { font-family: var(--mono); font-size: 12px; }
   #nodes-list .title { color: var(--muted); margin-left: auto; font-size: 11px; }
+  #nodes-list .files { color: #fcd34d; font-family: var(--mono); font-size: 10px; margin-left: 8px; cursor: pointer; }
+  #dag-canvas .artifact-link { cursor: pointer; }
+  #toast {
+    position: fixed; top: 24px; left: 50%; transform: translateX(-50%) translateY(-8px);
+    background: #161b22; color: #2dd4bf;
+    padding: 9px 20px; border-radius: 8px; font-size: 13px; font-weight: 600;
+    border: 1px solid #2dd4bf;
+    opacity: 0; transition: opacity .2s, transform .2s; pointer-events: none; z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,.3);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   #artifact {
     font-family: var(--mono); font-size: 12px; white-space: pre-wrap;
     background: var(--panel); padding: 10px; border-radius: 8px;
@@ -254,6 +293,7 @@ _HTML = textwrap.dedent("""\
 </style>
 </head>
 <body>
+<div id="toast"></div>
 <header>
   <h1>easyflow <span class="dot">·</span> <span id="flow-id">-</span></h1>
   <span class="status" id="job-status">idle</span>
@@ -293,9 +333,12 @@ es.onmessage = async (e) => {
   if (data.dag && data.dag !== lastDag) { lastDag = data.dag; document.getElementById('dag-canvas').innerHTML = data.dag; bindNodes(); }
   document.getElementById('flow-id').textContent = data.flow_id;
   document.getElementById('job-status').textContent = data.status;
-  document.getElementById('nodes-list').innerHTML = data.nodes.map(n =>
-    `<div class="row${n.id===current?' active':''}" data-id="${n.id}"><span class="dot" style="background:${n.color}"></span><span class="id">${n.id}</span><span class="title">${n.title}</span></div>`
-  ).join('');
+  document.getElementById('nodes-list').innerHTML = data.nodes.map(n => {
+    const files = n.file_paths ? Object.entries(n.file_paths).map(([fname, fpath]) =>
+      `<span class="files" data-path="${fpath}" title="点击复制完整路径"><svg width="11" height="11" viewBox="0 0 11 11" style="vertical-align:-1px;margin-right:2px"><path d="M1,1 h6 l2,2 v8 h-8 z M7,1 v2 h2" stroke="#fcd34d" fill="none" stroke-width="1" stroke-linejoin="round"/></svg>${fname}</span>`
+    ).join('') : '';
+    return `<div class="row${n.id===current?' active':''}" data-id="${n.id}"><span class="dot" style="background:${n.color}"></span><span class="id">${n.id}</span><span class="title">${n.title}</span>${files}</div>`;
+  }).join('');
   if (current && data.artifacts[current] !== undefined) {
     document.getElementById('artifact').textContent = JSON.stringify(data.artifacts[current], null, 2);
   } else if (paused) {
@@ -311,12 +354,27 @@ es.onmessage = async (e) => {
   const abortable = data.started && (data.status === 'running' || data.status === 'paused');
   document.getElementById('abort').disabled = !abortable;
 };
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(window._toastTimer);
+  window._toastTimer = setTimeout(() => t.classList.remove('show'), 1500);
+}
 function bindNodes() {
   document.querySelectorAll('#dag-canvas .node').forEach(g => {
     g.onclick = () => { current = g.dataset.id; es.onmessage({data: es.lastEventId}); };
   });
   document.querySelectorAll('#nodes-list .row').forEach(r => {
-    r.onclick = () => { current = r.dataset.id; };
+    r.onclick = (e) => { if (e.target.closest('.files')) return; current = r.dataset.id; };
+  });
+  // 产物文件名点击复制完整路径(DAG + 侧边栏统一),toast 提示
+  document.querySelectorAll('#dag-canvas .artifact-link, #nodes-list .files').forEach(el => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      const path = el.dataset.path;
+      navigator.clipboard.writeText(path).then(() => showToast('路径已复制到剪切板'));
+    };
   });
   applyView();
 }
@@ -381,6 +439,8 @@ def _state_snapshot(
                 "status": status,
                 "color": _STATUS_COLOR.get(status, "#fff"),
                 "title": title,
+                "files": [f[0] for f in _artifact_files(runner, sid)],
+                "file_paths": dict(_artifact_files(runner, sid)),
             }
         )
     paused = next(

@@ -71,8 +71,8 @@ def test_only_single_replica():
     assert "merge" not in runner.artifacts
 
 
-def test_accept_failure_emits_error(tmp_path: Path):
-    """accept 返回 False → emit error,节点不执行。"""
+def test_accept_failure_emits_skip(tmp_path: Path):
+    """accept 返回 False → emit skipped,节点不执行,artifact 为 None,下游可推进。"""
     d = tmp_path / "acc"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
@@ -101,11 +101,16 @@ def test_accept_failure_emits_error(tmp_path: Path):
     runner = Runner.load(str(d))
     events = _events(runner)
     assert any(
-        e.type == "error" and "接手确认失败" in (e.message or "") and e.step_id == "b"
+        e.type == "trace"
+        and e.status == "skipped"
+        and e.step_id == "b"
         for e in events
     )
-    assert runner.state.status == "error"
-    assert "b" not in runner.artifacts
+    # b 未执行 run,artifact 为 None(占位),job 正常完成
+    assert runner.state.steps["b"].status == "skipped"
+    assert runner.artifacts.get("b") is None
+    assert runner.state.status == "done"
+    assert not any(e.type == "error" for e in events)
 
 
 def test_deliver_failure_emits_error(tmp_path: Path):
