@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import json
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -62,3 +64,23 @@ def error(step_id: str | None, message: str) -> WorkflowJobEvent:
 
 def end() -> WorkflowJobEvent:
     return WorkflowJobEvent(type="end")
+
+
+def easyflow_event(event: WorkflowJobEvent) -> None:
+    """按事件类型打印一行,cli / skill run.py / view 共用的统一消费入口。
+
+    checkpoint 只打印 artifact,不打印交互提示(交互由调用方自行处理)。
+    """
+    if event.type == "trace":
+        print(f"[{event.step_id}] {event.status}: {event.detail}")
+    elif event.type == "delta":
+        print(f"[{event.step_id}] {event.text}", end="")
+    elif event.type == "checkpoint":
+        print(f"\n[checkpoint] {event.step_id} artifact:")
+        print(json.dumps(event.artifact, ensure_ascii=False, indent=2, default=str))
+    elif event.type == "final":
+        print(f"[{event.step_id}] artifact: {event.artifact}")
+    elif event.type == "error":
+        print(f"[error] {event.step_id}: {event.message}", file=sys.stderr)
+    elif event.type == "end":
+        print("[end]")

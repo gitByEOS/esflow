@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import textwrap
 import webbrowser
 from typing import Any
@@ -320,7 +321,7 @@ _HTML = textwrap.dedent("""\
     <h3>节点</h3>
     <div id="nodes-list"></div>
     <h3>artifact</h3>
-    <div id="artifact">(无选中节点)</div>
+    <div id="artifact">(无产物)</div>
     <h3>事件流</h3>
     <div id="log"></div>
   </aside>
@@ -343,6 +344,12 @@ es.onmessage = async (e) => {
     document.getElementById('artifact').textContent = JSON.stringify(data.artifacts[current], null, 2);
   } else if (paused) {
     document.getElementById('artifact').textContent = JSON.stringify(data.artifacts[paused] || '(无)', null, 2);
+  } else {
+    const ids = Object.keys(data.artifacts);
+    const last = ids.length ? ids[ids.length - 1] : null;
+    document.getElementById('artifact').textContent = last
+      ? JSON.stringify(data.artifacts[last], null, 2)
+      : '(无产物)';
   }
   const log = document.getElementById('log');
   log.innerHTML = data.events.map(l => `<div class="line ${l.cls}">${l.text}</div>`).join('');
@@ -422,6 +429,16 @@ async function post(body) {
 """)
 
 
+def _artifact_summary(artifact: Any) -> str:
+    """final 事件 artifact 摘要:字符串原样,dict JSON 截断到 200 字符。"""
+    if artifact is None:
+        return "(无)"
+    if isinstance(artifact, str):
+        return artifact if len(artifact) <= 200 else artifact[:200] + "…"
+    s = json.dumps(artifact, ensure_ascii=False, default=str)
+    return s if len(s) <= 200 else s[:200] + "…"
+
+
 def _state_snapshot(
     runner: Runner, events: list[WorkflowJobEvent], started: bool = False
 ) -> dict[str, Any]:
@@ -463,6 +480,9 @@ def _state_snapshot(
             cls, text = "ck", text + " ⏸"
         elif ev.type == "error":
             cls = "err"
+        elif ev.type == "final":
+            cls = "end"
+            text += " → " + _artifact_summary(ev.artifact)
         elif ev.type == "end":
             cls = "end"
         log_lines.append({"cls": cls, "text": text})
@@ -508,18 +528,49 @@ def _http(resp: bytes, ctype: str = "text/html; charset=utf-8", status: int = 20
     ).encode("latin-1") + resp
 
 
-async def run_html_view(flow_dir: str, host: str = "127.0.0.1", port: int = 8765) -> int:
-    """启动 HTML 调试界面:HTTP server + runner(等 start 信号才开跑)。"""
-    runner = Runner.load(flow_dir)
+async def run_html_view(
+    flow_dir: str,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    debug: bool = False,
+    only: set[str] | None = None,
+    clear: bool = False,
+) -> int:
+    """启动 HTML 调试界面:HTTP server + runner。
+
+    debug 模式产物固定目录 + 持久化复用;clear 先清空 debug 目录;
+    only 指定单调试节点,break_before=only 让 runner 跑完上游后暂停在指定节点前,
+    等 resume 信号才执行该节点。非 only 模式等用户点 start 才开跑。
+    """
+    runner = Runner.load(flow_dir, debug=debug)
+    if clear:
+        runner.clear_debug()
+    # debug 单点调试:上游产物缺失则命令行提示并退出,不开 view
+    if debug and only:
+        missing = runner.missing_upstream(set(only))
+        if missing:
+            print(
+                f"单调试 {', '.join(only)} 缺上游产物:{', '.join(missing)}",
+                file=sys.stderr,
+            )
+            print(
+                f"先全跑落产物:easyflow debug {flow_dir}",
+                file=sys.stderr,
+            )
+            return 1
     events: list[WorkflowJobEvent] = []
     sse_queues: list[asyncio.Queue] = []
     finished = {"v": False}
-    started = {"v": False}
+    started = {"v": bool(only)}
     start_event = asyncio.Event()
+    break_before = set(only) if only else None
 
     async def drive() -> None:
-        await start_event.wait()
-        async for ev in runner.run():
+        # only 模式:自动开跑,上游从磁盘复用,跑到指定节点前暂停等 resume
+        # 非 only 模式:等用户点 start
+        if not only:
+            await start_event.wait()
+        async for ev in runner.run(scope=only, break_before=break_before):
             events.append(ev)
             for q in sse_queues:
                 await q.put(1)
@@ -586,8 +637,12 @@ async def run_html_view(flow_dir: str, host: str = "127.0.0.1", port: int = 8765
 
     server = await asyncio.start_server(handle, host, port)
     url = f"http://{host}:{port}"
-    print(f"easyflow view → {url}")
-    print("浏览器打开后点 start 开始,checkpoint 时 r=resume e=retry a=abort")
+    mode = "debug" if debug else "run"
+    print(f"easyflow view ({mode}) → {url}")
+    if only:
+        print(f"单调试节点:{' '.join(only)}(上游自动跑完,在节点前暂停等 resume)")
+    else:
+        print("浏览器打开后点 start 开始,checkpoint 时 r=resume e=retry a=abort")
     print("job 跑完后自动退出")
     webbrowser.open(url)
 

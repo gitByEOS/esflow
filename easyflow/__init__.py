@@ -18,7 +18,16 @@
     $ easyflow view ./my_flow                  # Web 调试界面
 """
 
-from .event import WorkflowJobEvent, trace, delta, checkpoint, final, error, end
+from .event import (
+    WorkflowJobEvent,
+    trace,
+    delta,
+    checkpoint,
+    final,
+    error,
+    end,
+    easyflow_event,
+)
 from .step import Node, StepContext, Checkpoint, StepDefine, FanOut
 from .flow import flow, edge, Edge, FlowDefine
 from .state import JobState, StepState, apply_event
@@ -33,6 +42,7 @@ __all__ = [
     "final",
     "error",
     "end",
+    "easyflow_event",
     "Node",
     "StepContext",
     "Checkpoint",

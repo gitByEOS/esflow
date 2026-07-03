@@ -5,8 +5,15 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from easyflow.cli import cmd_new, main
+import easyflow.runner as runner_mod
+from easyflow.cli import cmd_debug, cmd_new, main
 from easyflow.runner import Runner
+
+
+def _debug_root(monkeypatch, tmp_path: Path) -> Path:
+    root = tmp_path / "debug_root"
+    monkeypatch.setattr(runner_mod, "DEBUG_OUTPUT_ROOT", root)
+    return root
 
 
 def test_new_generates_runnable_template(tmp_path: Path, monkeypatch) -> None:
@@ -64,3 +71,20 @@ def test_new_strips_path(tmp_path: Path, monkeypatch) -> None:
     # id/类名取末段 okr,不含斜杠
     assert "class Okr:" in flow_py
     assert 'id="okr"' in flow_py
+
+
+def test_debug_node_refuses_when_upstream_missing(tmp_path: Path, monkeypatch, capsys) -> None:
+    """debug --node X 上游产物缺失时,cmd_debug 返回 1 并打印提示,不启动 view。"""
+    _debug_root(monkeypatch, tmp_path)
+    example = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
+
+    class _Args:
+        flow_dir = str(example)
+        node = ["export"]
+        clear = True
+
+    rc = cmd_debug(_Args())
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "上游产物缺失" in err
+    assert "easyflow debug" in err

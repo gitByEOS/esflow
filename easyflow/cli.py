@@ -3,6 +3,8 @@
     easyflow new my_skill                       # 生成 skill 模板(含可跑 demo flow)
     easyflow run ./my_flow                      # 全跑,checkpoint 时 stdin 等命令
     easyflow run ./my_flow --node worker#2      # 单调试指定副本及其上游
+    easyflow debug ./my_flow                    # 调试模式:产物固定到 /tmp/easyflow/debug/<flow_id>/,持久化 artifact
+    easyflow debug ./my_flow --node worker#2    # 单调试复用上游持久化产物,只跑指定节点
     easyflow view ./my_flow                     # Web 调试界面(浏览器,SSE 实时推送)
 """
 
@@ -10,36 +12,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
 
+from .event import easyflow_event
 from .runner import Runner
-
-
-def _print_event(event) -> None:
-    if event.type == "trace":
-        print(f"[{event.step_id}] {event.status}: {event.detail}")
-    elif event.type == "delta":
-        print(f"[{event.step_id}] {event.text}", end="")
-    elif event.type == "checkpoint":
-        print(f"\n[checkpoint] {event.step_id} artifact:")
-        print(json.dumps(event.artifact, ensure_ascii=False, indent=2, default=str))
-        print("输入 resume / retry <step> / abort:", end=" ", flush=True)
-    elif event.type == "final":
-        pass  # final 已在 checkpoint 展示或随 trace
-    elif event.type == "error":
-        print(f"[error] {event.step_id}: {event.message}", file=sys.stderr)
-    elif event.type == "end":
-        print("[end]")
 
 
 async def _run_cli(flow_dir: str, only: set[str] | None) -> int:
     runner = Runner.load(flow_dir)
     async for event in runner.run(only=only):
-        _print_event(event)
+        easyflow_event(event)
         if event.type == "checkpoint":
+            print("输入 resume / retry <step> / abort:", end=" ", flush=True)
             line = sys.stdin.readline().strip()
             if not line or line == "resume":
                 runner.resume()
@@ -62,6 +48,28 @@ async def _run_cli(flow_dir: str, only: set[str] | None) -> int:
 def cmd_run(args) -> int:
     only = set(args.node) if args.node else None
     return asyncio.run(_run_cli(args.flow_dir, only))
+
+
+def cmd_debug(args) -> int:
+    from .htmlview import run_html_view  # 延迟导入,debug 时才需要
+
+    only = set(args.node) if args.node else None
+    # 单点调试预检:上游产物必须已在 debug 目录,否则 view 打开无节点可跑
+    if only:
+        pre = Runner.load(args.flow_dir, debug=True)
+        if args.clear:
+            pre.clear_debug()
+        missing = pre.missing_upstream(only)
+        if missing:
+            print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
+            print(
+                f"先全跑落产物:easyflow debug {args.flow_dir}",
+                file=sys.stderr,
+            )
+            return 1
+    return asyncio.run(
+        run_html_view(args.flow_dir, debug=True, only=only, clear=args.clear)
+    )
 
 
 def cmd_view(args) -> int:
@@ -87,13 +95,19 @@ python3 scripts/run.py
 
 ## 节点
 
-- `fetch`:抓取数据
-- `analyze`:分析数据
-- `report`:生成报告
+- `fetch`:生成简单 html,用 `self.depth` 决定标题层级,落盘到 output_dir
+- `analyze`:读取上游 html,统计大小
+- `report`:基于分析结果生成报告,落盘到 output_dir/report.md
+
+## 预检
+
+`run.py` 启动前用 `pass_check` 跑检查函数,任一失败聚合抛 `FlowCheckError` 不启动 runner。
+新增检查:在 `run.py` 加 `() -> str | None` 函数,传给 `pass_check`。
 
 ## 扩展
 
 在 `scripts/nodes/` 下加 Node 子类,在 `scripts/flow.py` 里声明 edges/replicas/dynamic。
+节点产物文件写 `self.output_dir`,run 返回的 dict 登记路径供 view 展示与下游读取。
 详见项目根 README。
 """
 
@@ -111,35 +125,46 @@ class {cls}:
     ]
 '''
 
-_FETCH_PY = '''"""fetch 节点:抓取数据。"""
+_FETCH_PY = '''"""fetch 节点:生成一个简单 html,用 self.depth 决定标题层级。"""
 
 from easyflow import Node
 
 
 class Fetch(Node):
     id = "fetch"
-    title = "抓取数据"
+    title = "生成 HTML"
 
     def run(self, ctx) -> dict:
-        return {"items": [1, 2, 3], "count": 3}
+        level = self.depth + 1
+        html = f"<!doctype html><meta charset=utf-8><h{level}>Hello EasyFlow</h{level}>"
+        path = str(self.output_dir / "page.html")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(html)
+        return {"html_path": path, "depth": self.depth}
 '''
 
-_ANALYZE_PY = '''"""analyze 节点:分析上游数据。"""
+_ANALYZE_PY = '''"""analyze 节点:读取上游 html,统计大小。"""
 
 from easyflow import Node
 
 
 class Analyze(Node):
     id = "analyze"
-    title = "分析数据"
+    title = "分析 HTML"
 
     def run(self, ctx) -> dict:
         upstream = ctx.get("fetch")
-        items = upstream["items"]
-        return {"sum": sum(items), "count": upstream["count"]}
+        path = upstream["html_path"]
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        return {
+            "size": len(content),
+            "depth": upstream["depth"],
+            "html_path": path,
+        }
 '''
 
-_REPORT_PY = '''"""report 节点:基于分析结果生成报告。"""
+_REPORT_PY = '''"""report 节点:基于分析结果生成报告,落盘到 output_dir。"""
 
 from easyflow import Node
 
@@ -150,29 +175,43 @@ class Report(Node):
 
     def run(self, ctx) -> dict:
         analysis = ctx.get("analyze")
-        return {"report": f"共 {analysis['count']} 项,合计 {analysis['sum']}"}
+        content = f"""# 分析报告
+
+- html 大小: {analysis['size']} 字节
+- 生成节点深度: {analysis['depth']}
+- html 路径: {analysis['html_path']}"""
+        path = str(self.output_dir / "report.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"report_path": path, "summary": content}
 '''
 
 _RUN_PY = '''#!/usr/bin/env python3
-"""直接跑:python3 scripts/run.py"""
+"""直接跑:python3 scripts/run.py
+
+启动前 pass_check 预检,任一失败聚合抛 FlowCheckError,不启动 runner。
+"""
 
 import asyncio
+import sys
 from pathlib import Path
 
-from easyflow import Runner
+from easyflow import Runner, easyflow_event
+from easyflow.check import pass_check
+
+
+def check_python_version() -> str | None:
+    """Python >= 3.10(easyflow 用了 X | Y 类型语法)。"""
+    return None if sys.version_info >= (3, 10) else (
+        f"需要 Python >= 3.10,当前 {sys.version_info.major}.{sys.version_info.minor}"
+    )
 
 
 async def main():
+    pass_check(check_python_version)
     runner = Runner.load(str(Path(__file__).parent))
     async for event in runner.run():
-        if event.type == "trace":
-            print(f"[{event.step_id}] {event.status}: {event.detail}")
-        elif event.type == "final":
-            print(f"[{event.step_id}] artifact: {event.artifact}")
-        elif event.type == "error":
-            print(f"[error] {event.step_id}: {event.message}")
-        elif event.type == "end":
-            print("[end]")
+        easyflow_event(event)
 
 
 if __name__ == "__main__":
@@ -242,6 +281,25 @@ def main(argv: list[str] | None = None) -> int:
         help="只跑指定节点及其上游(空格分隔多个)",
     )
     p_run.set_defaults(func=cmd_run)
+
+    p_debug = sub.add_parser(
+        "debug",
+        help="调出 view 调试界面:产物固定到 /tmp/easyflow/debug/<flow_id>/,持久化复用",
+    )
+    p_debug.add_argument("flow_dir", help="flow 目录路径")
+    p_debug.add_argument(
+        "--node", "-n",
+        nargs="+",
+        default=None,
+        metavar="NODE",
+        help="单点调试:上游从磁盘复用,在指定节点前暂停等 resume(空格分隔多个)",
+    )
+    p_debug.add_argument(
+        "--clear",
+        action="store_true",
+        help="清空 debug 目录持久化产物后从头跑",
+    )
+    p_debug.set_defaults(func=cmd_debug)
 
     p_view = sub.add_parser("view", help="浏览器调试界面")
     p_view.add_argument("flow_dir", help="flow 目录路径")
