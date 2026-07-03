@@ -642,7 +642,7 @@ async def run_html_view(
     if only:
         print(f"单调试节点:{' '.join(only)}(上游自动跑完,在节点前暂停等 resume)")
     else:
-        print("浏览器打开后点 start 开始,checkpoint 时 r=resume e=retry a=abort")
+        print("浏览器打开后点 start 开始,checkpoint 时按钮控制 resume/retry/abort")
     print("job 跑完后自动退出")
     webbrowser.open(url)
 

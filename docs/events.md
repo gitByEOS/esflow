@@ -6,7 +6,7 @@ Runner 产出的唯一事件流(`WorkflowJobEvent`):
 | ------------ | ------------------------------------------------- |
 | `trace`      | 节点状态变更(queued / running / done / error / skipped) |
 | `delta`      | 节点产出增量文本                                          |
-| `checkpoint` | 节点到暂停点,等外部 resume / retry                         |
+| `checkpoint` | 节点到暂停点,等外部 continue / retry / abort                |
 | `final`      | 节点最终 artifact                                     |
 | `error`      | 错误(含接手/脱手确认失败)                                    |
 | `end`        | job 结束                                            |

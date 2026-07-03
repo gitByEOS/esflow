@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 
 import easyflow.runner as runner_mod
-from easyflow.cli import cmd_debug, cmd_new, main
+from easyflow.cli import _handle_checkpoint_command, cmd_debug, cmd_new, main
 from easyflow.runner import Runner
 
 
@@ -17,6 +17,22 @@ def _debug_root(monkeypatch, tmp_path: Path) -> Path:
     root = tmp_path / "debug_root"
     monkeypatch.setattr(runner_mod, "DEBUG_OUTPUT_ROOT", root)
     return root
+
+
+class _CheckpointRunner:
+    """记录 checkpoint 命令映射到哪个控制动作。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    def resume(self) -> None:
+        self.calls.append(("resume", None))
+
+    def retry(self, step_id: str) -> None:
+        self.calls.append(("retry", step_id))
+
+    def abort(self) -> None:
+        self.calls.append(("abort", None))
 
 
 def test_new_generates_runnable_template(tmp_path: Path, monkeypatch) -> None:
@@ -44,6 +60,23 @@ def test_new_generates_runnable_template(tmp_path: Path, monkeypatch) -> None:
     assert runner.state.status == "done"
     assert "html 大小" in runner.artifacts["report"]["summary"]
     assert (Path(runner.artifacts["report"]["report_path"])).exists()
+
+
+def test_checkpoint_short_commands() -> None:
+    """checkpoint stdin 只支持 c/r/a 短命令,回车等价于 continue。"""
+    runner = _CheckpointRunner()
+
+    _handle_checkpoint_command(runner, "", "review")
+    _handle_checkpoint_command(runner, "c", "review")
+    _handle_checkpoint_command(runner, "r", "review")
+    _handle_checkpoint_command(runner, "a", "review")
+
+    assert runner.calls == [
+        ("resume", None),
+        ("resume", None),
+        ("retry", "review"),
+        ("abort", None),
+    ]
 
 
 def test_new_refuses_existing(tmp_path: Path, monkeypatch) -> None:

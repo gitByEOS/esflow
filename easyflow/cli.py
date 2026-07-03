@@ -20,6 +20,21 @@ from pathlib import Path
 
 from .event import easyflow_event
 from .runner import Runner
+from .state import JobStatus
+
+
+def _handle_checkpoint_command(runner: Runner, command: str, step_id: str | None) -> None:
+    """处理 checkpoint 短命令:c=继续,r=重试当前,a=中止。"""
+    cmd = command.strip().lower()
+    if not cmd or cmd == "c":
+        runner.resume()
+    elif cmd == "r":
+        runner.retry(step_id or "")
+    elif cmd == "a":
+        runner.abort()
+    else:
+        print(f"未知命令:{command},默认 continue")
+        runner.resume()
 
 
 async def _run_cli(
@@ -32,23 +47,11 @@ async def _run_cli(
     async for event in runner.run(only=only, from_steps=from_steps):
         easyflow_event(event)
         if event.type == "checkpoint":
-            print("输入 resume / retry <step> / abort:", end=" ", flush=True)
+            print("(c) continue, (r) retry, (a) abort:", end=" ", flush=True)
             line = sys.stdin.readline().strip()
-            if not line or line == "resume":
-                runner.resume()
-            elif line.startswith("retry"):
-                parts = line.split()
-                if len(parts) >= 2:
-                    runner.retry(parts[1])
-                else:
-                    runner.retry(event.step_id)
-            elif line == "abort":
-                runner.abort()
-            else:
-                print(f"未知命令:{line},默认 resume")
-                runner.resume()
+            _handle_checkpoint_command(runner, line, event.step_id)
         if event.type == "end":
-            return 0 if runner.state.status != "error" else 1
+            return 0 if runner.state.status != JobStatus.ERROR else 1
     return 0
 
 

@@ -17,7 +17,7 @@
 | 同层依次启动 | `serial` 集合同层按 `nodes` 顺序启动,用于 fallback 兜底链 |
 | 接手 / 脱手确认 | `accept` False → skip;`deliver` 失败 → error(契约式设计) |
 | skip 兜底链 | 上游有产物则 skip 当前,无产物则当前接手兜底 |
-| 人机协作 | `checkpoint=AFTER` 暂停 job,等 `resume` / `retry` / `abort` |
+| 人机协作 | `checkpoint=AFTER` 暂停 job,等 `c` / `r` / `a` 控制 |
 | retry 复用上游 | 已完成且无依赖变更的上游 artifact 复用,不重跑 |
 | 定点续跑 | `run --out DIR --from NODE` 复用上游产物,只重跑指定节点及下游 |
 | 单节点调试 | `--node worker#2` 只跑指定节点及其必需上游 |
@@ -31,25 +31,36 @@
 pip install easyflow
 ```
 
-## 命令行工具
+## 快速开始
+
+从仓库源码试用:
 
 ```bash
-easyflow new my_skill                  # 生成 skill 模板(含可跑 demo flow)
-easyflow run ./my_flow                  # 全跑,checkpoint 时 stdin 等命令
-easyflow run ./my_flow --out ./runs/a   # 产物写入固定目录,生成可续跑 artifact
-easyflow run ./my_flow --out ./runs/a --from translate  # 从 translate 续跑到末端
-easyflow run ./my_flow --node worker#2  # 单节点调试:只跑指定节点及其上游
-easyflow debug ./my_flow                # 调出 view 调试界面,产物固定到 /tmp/easyflow/debug/<flow_id>/
-easyflow debug ./my_flow --node worker#2  # 单点调试:上游从磁盘复用,在节点前暂停等 resume
-easyflow debug ./my_flow --clear          # 清空 debug 目录后从头跑
-easyflow view ./my_flow                 # 浏览器调试界面(非 debug,产物不持久化)
+easyflow run examples/quickstart_flow
 ```
 
-checkpoint 时 stdin 命令:`resume` / `retry <step>` / `abort`。
+生成一个自己的 flow:
 
-人工修正某个节点产物后,从它的下一步继续跑:先用 `--out` 固定产物目录,再用 `--from` 指定重跑起点。若只是修改 artifact 指向的文件内容,不必改 `artifact.json`;若换了文件路径,同步修改对应节点的 `artifact.json`。
+```bash
+easyflow new my_skill
+python my_skill/scripts/run.py
+```
 
-debug 与 run 的区别、产物路径策略、artifact 持久化与复用见 [docs/debug.md](docs/debug.md)。
+快速上手见 [docs/quickstart.md](docs/quickstart.md)。
+
+## 常用命令
+
+```bash
+easyflow run ./my_flow
+easyflow run ./my_flow --out ./runs/a
+easyflow run ./my_flow --out ./runs/a --from translate
+easyflow debug ./my_flow
+easyflow view ./my_flow
+```
+
+checkpoint 时 stdin 命令:`c` continue / `r` retry / `a` abort。
+
+人工修正某个节点产物后,从它的下一步继续跑:先用 `--out` 固定产物目录,再用 `--from` 指定重跑起点。详见 [docs/artifacts.md](docs/artifacts.md)。
 
 ## 最小用法
 
@@ -76,13 +87,13 @@ class Fetch(Node):
         return {"items": [1, 2, 3]}
 ```
 
-更详细的节点开发(`accept`/`deliver`)、edge 用法、skill 模板生成见 [docs/usage.md](docs/usage.md)。
+更详细的节点开发(`accept`/`deliver`)、edge 用法、skill 模板生成见 [docs/quickstart.md](docs/quickstart.md)。
 
 ## 示例一览
 
 | 示例 | 链路 | 演示特性 |
 | --- | --- | --- |
-| [`examples/quickstart_flow/`](examples/quickstart_flow) | `fetch → process → review → export` | 4 节点线性 DAG + `checkpoint` |
+| [`examples/quickstart_flow/`](examples/quickstart_flow) | `fetch → process → review → export` | 首屏推荐:4 节点线性 DAG + `checkpoint` |
 | [`examples/skip_flow/`](examples/skip_flow) | `trigger → fetch_from_{ssr,wechat,bili} → merge → parse_to_{html,md} → done` | 两组 `serial` fallback 链:多源兜底抓取 + 解析格式降级 |
 | [`examples/fanout_flow/`](examples/fanout_flow) | `fetch → worker#5 → merge` | 静态 `replicas` 扇出/扇入 |
 | [`examples/fanout_dynamic/`](examples/fanout_dynamic) | `ingest → split → worker(动态) → merge` | `FanOut` 运行时展开副本 |
@@ -91,9 +102,10 @@ class Fetch(Node):
 
 ## 文档
 
-- [docs/usage.md](docs/usage.md) — 目录约定、节点开发、accept/deliver、edge、skill 模板
+- [CHANGELOG.md](CHANGELOG.md) — 版本变化与已知限制
+- [docs/quickstart.md](docs/quickstart.md) — 快速上手与第一个 flow
+- [docs/artifacts.md](docs/artifacts.md) — output_dir、artifact.json、--out、--from
 - [docs/semantics.md](docs/semantics.md) — 关键语义、静态 replicas vs 动态 FanOut、动态扇出限制
 - [docs/pass_check.md](docs/pass_check.md) — 启动预检
 - [docs/events.md](docs/events.md) — 事件协议
-- [docs/debug.md](docs/debug.md) — debug 模式:产物固定目录、artifact 持久化与复用
-- [docs/roadmap.md](docs/roadmap.md) — 后续
+- [docs/debug.md](docs/debug.md) — debug/view 调试模式

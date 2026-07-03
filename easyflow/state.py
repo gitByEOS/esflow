@@ -7,15 +7,37 @@ view/CLI 订阅 state 渲染进度。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from .event import WorkflowJobEvent
 
 
+class StepStatus(str, Enum):
+    """节点运行时状态。继承 str 让 == "done" 与 dict key 兼容现有字符串用法。"""
+
+    IDLE = "idle"
+    QUEUED = "queued"
+    RUNNING = "running"
+    PAUSED = "paused"
+    DONE = "done"
+    ERROR = "error"
+    SKIPPED = "skipped"
+
+
+class JobStatus(str, Enum):
+    """job 整体状态:StepStatus 的运行子集,不含节点级 idle/queued/skipped。"""
+
+    RUNNING = "running"
+    PAUSED = "paused"
+    DONE = "done"
+    ERROR = "error"
+
+
 @dataclass
 class StepState:
     step_id: str
-    status: str = "idle"  # idle / queued / running / paused / done / error / skipped
+    status: StepStatus = StepStatus.IDLE
     artifact: Any | None = None
     detail: str = ""
     text: str = ""  # delta 累积
@@ -25,7 +47,7 @@ class StepState:
 class JobState:
     flow_id: str
     steps: dict[str, StepState] = field(default_factory=dict)
-    status: str = "running"  # running / paused / done / error
+    status: JobStatus = JobStatus.RUNNING
     finished: bool = False
 
 
@@ -34,8 +56,8 @@ def apply_event(state: JobState, event: WorkflowJobEvent) -> JobState:
 
     if event.type == "end":
         state.finished = True
-        if state.status != "error":
-            state.status = "done"
+        if state.status != JobStatus.ERROR:
+            state.status = JobStatus.DONE
         return state
 
     if event.step_id and event.step_id not in state.steps:
@@ -44,7 +66,8 @@ def apply_event(state: JobState, event: WorkflowJobEvent) -> JobState:
     if event.type == "trace":
         if event.step_id:
             s = state.steps[event.step_id]
-            s.status = event.status or s.status
+            # event.status 是 TraceStatus Literal,值域与 StepStatus 重叠,直接转枚举
+            s.status = StepStatus(event.status) if event.status else s.status
             if event.detail:
                 s.detail = event.detail
     elif event.type == "delta":
@@ -54,18 +77,18 @@ def apply_event(state: JobState, event: WorkflowJobEvent) -> JobState:
     elif event.type == "checkpoint":
         if event.step_id:
             s = state.steps[event.step_id]
-            s.status = "paused"
+            s.status = StepStatus.PAUSED
             s.artifact = event.artifact
-            state.status = "paused"
+            state.status = JobStatus.PAUSED
     elif event.type == "final":
         if event.step_id:
             s = state.steps[event.step_id]
             s.artifact = event.artifact
-            s.status = "done"
+            s.status = StepStatus.DONE
     elif event.type == "error":
         if event.step_id:
             s = state.steps[event.step_id]
-            s.status = "error"
-        state.status = "error"
+            s.status = StepStatus.ERROR
+        state.status = JobStatus.ERROR
 
     return state

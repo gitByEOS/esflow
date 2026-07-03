@@ -28,12 +28,12 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable, Literal, NamedTuple
 
 from .event import WorkflowJobEvent, trace, final, checkpoint, error, end
 from .flow import Edge, FlowDefine
 from .loader import load_flow
-from .state import JobState, StepState, apply_event
+from .state import JobState, JobStatus, StepState, StepStatus, apply_event
 from .step import Checkpoint, FanOut, Node, StepDefine, _instantiate
 
 DEFAULT_OUTPUT_ROOT = Path("/tmp/easyflow/outputs")
@@ -52,6 +52,55 @@ def _gen_job_id() -> str:
 class _ControlSignal:
     kind: str  # resume / retry / abort
     from_step: str | None = None
+
+
+# run() 加载策略:决定启动前如何处理 job_dir 持久化产物
+_LoadStrategy = Literal[
+    "load_all",                       # 全量加载已完成产物,跳过已完成节点
+    "load_skip_target",               # 加载但跳过 target,强制重跑 target(scope 单点调试)
+    "invalidate_all",                 # 清掉所有节点状态与产物(--out 全跑)
+    "load_skip_target_then_invalidate",  # 加载跳过 target 后再清 target(from_steps 续跑)
+]
+
+
+class _RunArgs(NamedTuple):
+    """_parse_run_args 的返回:target 限定跑哪些节点 + 暂停点 + 加载策略。"""
+
+    target: set[str] | None
+    break_before: set[str] | None
+    load_strategy: _LoadStrategy
+
+
+def _parse_run_args(
+    only: set[str] | None,
+    break_before: set[str] | None,
+    scope: set[str] | None,
+    from_steps: set[str] | None,
+    persist_artifacts: bool,
+    explicit_job_dir: bool,
+    downstream: Callable[[str], set[str]],
+    required: Callable[[set[str]], set[str]],
+) -> _RunArgs:
+    """把 run() 的 4 个互斥入参解析成统一的 _RunArgs。
+
+    优先级:from_steps > scope > only > 默认。各模式推导 target 与加载策略:
+    - from_steps: target = from_steps 各自下游并集,加载跳过 target 后再清 target(续跑)
+    - scope:     target = scope 本身,加载跳过 target(单点调试上游复用)
+    - only:      target = only 及其上游,全量加载(跑必需闭包)
+    - 默认:      target = None,explicit_job_dir 时清全部,否则全量加载
+    """
+    if from_steps is not None:
+        if not persist_artifacts:
+            raise RuntimeError("from_steps 需要可复用的 artifact 目录")
+        target = set().union(*(downstream(s) for s in from_steps))
+        return _RunArgs(target, break_before, "load_skip_target_then_invalidate")
+    if scope is not None:
+        return _RunArgs(set(scope), break_before, "load_skip_target")
+    if only is not None:
+        return _RunArgs(required(only), break_before, "load_all")
+    if explicit_job_dir:
+        return _RunArgs(None, break_before, "invalidate_all")
+    return _RunArgs(None, break_before, "load_all")
 
 
 class _Ctx:
@@ -119,6 +168,9 @@ class Runner:
         self._target: set[str] | None = None
         self._break_before: set[str] | None = None
         self._break_triggered = False
+        # 邻接表缓存:从 self.flow.edges 派生,动态扩图后 _rebuild_adjacency 重建
+        self._upstream_map: dict[str, list[str]] = {}
+        self._downstream_map: dict[str, list[str]] = {}
         # 产物持久化:每节点 output_dir = job_dir / <step_id>,节点自己写文件
         # debug 模式:job_dir 固定(无 job_id),产物累积,artifact 持久化供单调试复用上游
         self.debug = debug
@@ -132,6 +184,8 @@ class Runner:
             self.job_dir = DEBUG_OUTPUT_ROOT / flow.id
         else:
             self.job_dir = output_root / flow.id / self.job_id
+        # 邻接表先建,_compute_depths 要用
+        self._rebuild_adjacency()
         # 拓扑深度:depth(node) = 1 + max(depth(upstream)),入口 0;回填到 StepDefine 和 Node
         self._depths = self._compute_depths()
         for sid, sd in self.steps.items():
@@ -172,14 +226,22 @@ class Runner:
         frontier: set[str] = set(scope)
         while frontier:
             n = frontier.pop()
-            for e in self.flow.edges:
-                if e.to == n and e.from_ not in needed:
-                    needed.add(e.from_)
-                    frontier.add(e.from_)
+            for up in self._upstream_map.get(n, []):
+                if up not in needed:
+                    needed.add(up)
+                    frontier.add(up)
         return [
             sid for sid in needed
             if not (self.job_dir / sid / _ARTIFACT_FILE).exists()
         ]
+
+    def _rebuild_adjacency(self) -> None:
+        """从 self.flow.edges 重建邻接表。__init__ 与 _expand_fanout 改图后调用。"""
+        self._upstream_map = {}
+        self._downstream_map = {}
+        for e in self.flow.edges:
+            self._downstream_map.setdefault(e.from_, []).append(e.to)
+            self._upstream_map.setdefault(e.to, []).append(e.from_)
 
     def _compute_depths(self) -> dict[str, int]:
         """算所有节点拓扑深度。动态 base 以 base id 参与算,副本展开时继承 base depth。"""
@@ -188,7 +250,7 @@ class Runner:
         def dfs(sid: str) -> int:
             if sid in depth:
                 return depth[sid]
-            ups = [e.from_ for e in self.flow.edges if e.to == sid]
+            ups = self._upstream_map.get(sid, [])
             depth[sid] = 0 if not ups else 1 + max(dfs(u) for u in ups)
             return depth[sid]
 
@@ -231,7 +293,7 @@ class Runner:
                 continue
             self.artifacts[sid] = artifact
             st = self.state.steps.setdefault(sid, StepState(step_id=sid))
-            st.status = "skipped" if artifact is None else "done"
+            st.status = StepStatus.SKIPPED if artifact is None else StepStatus.DONE
             st.artifact = artifact
 
     def _invalidate_steps(self, scope: set[str]) -> None:
@@ -240,39 +302,35 @@ class Runner:
             self.artifacts.pop(sid, None)
             st = self.state.steps.get(sid)
             if st:
-                st.status = "idle"
+                st.status = StepStatus.IDLE
                 st.artifact = None
                 st.detail = ""
                 st.text = ""
             if self._persist_artifacts:
                 shutil.rmtree(self.job_dir / sid, ignore_errors=True)
 
-    def _all_edges(self) -> list[Edge]:
-        """静态边 + 运行时动态扩图改写的 self.flow.edges。"""
-        return self.flow.edges
-
     def _downstream(self, from_step: str) -> set[str]:
         """from_step 及其所有下游(含自己)。"""
         result = {from_step}
-        changed = True
-        while changed:
-            changed = False
-            for e in self._all_edges():
-                if e.from_ in result and e.to not in result:
-                    result.add(e.to)
-                    changed = True
+        frontier = [from_step]
+        while frontier:
+            n = frontier.pop()
+            for m in self._downstream_map.get(n, []):
+                if m not in result:
+                    result.add(m)
+                    frontier.append(m)
         return result
 
     def _required(self, only: set[str]) -> set[str]:
         """only 集合及其全部上游(单调试时只跑这些节点)。"""
         target = set(only)
-        changed = True
-        while changed:
-            changed = False
-            for e in self._all_edges():
-                if e.to in target and e.from_ not in target:
-                    target.add(e.from_)
-                    changed = True
+        frontier = list(only)
+        while frontier:
+            n = frontier.pop()
+            for up in self._upstream_map.get(n, []):
+                if up not in target:
+                    target.add(up)
+                    frontier.append(up)
         return target
 
     def _ready_nodes(self) -> list[str]:
@@ -280,10 +338,10 @@ class Runner:
         completed = {
             sid
             for sid, s in self.state.steps.items()
-            if s.status in ("done", "skipped")
+            if s.status in (StepStatus.DONE, StepStatus.SKIPPED)
         }
         not_ready = completed | {
-            sid for sid, s in self.state.steps.items() if s.status == "paused"
+            sid for sid, s in self.state.steps.items() if s.status == StepStatus.PAUSED
         }
         ready: list[str] = []
         for sid in self.steps:
@@ -291,13 +349,12 @@ class Runner:
                 continue
             if self._target is not None and sid not in self._target:
                 continue
-            upstreams = [e.from_ for e in self._all_edges() if e.to == sid]
-            if all(u in completed for u in upstreams):
+            if all(u in completed for u in self._upstream_map.get(sid, [])):
                 ready.append(sid)
         return ready
 
     def _paused_nodes(self) -> list[str]:
-        return [sid for sid, s in self.state.steps.items() if s.status == "paused"]
+        return [sid for sid, s in self.state.steps.items() if s.status == StepStatus.PAUSED]
 
     def _apply_serial(self, ready: list[str]) -> list[str]:
         """serial 节点同层依次启动:ready 中属于 serial 集合的,只保留 flow.nodes 顺序最靠前的那个;
@@ -316,9 +373,9 @@ class Runner:
         if base not in self.flow.dynamic:
             raise RuntimeError(f"FanOut 指向非 dynamic 声明的 base:{base}")
         n = fanout.n
-        # 原边:base 的上游与下游
-        original_upstream = [e.from_ for e in self.flow.edges if e.to == base]
-        original_downstream = [e.to for e in self.flow.edges if e.from_ == base]
+        # 原边:base 的上游与下游(从邻接表取,避免遍历 edges)
+        original_upstream = self._upstream_map.get(base, [])
+        original_downstream = self._downstream_map.get(base, [])
         # 副本继承 base 拓扑深度(替换 base 在 DAG 里的位置)
         base_depth = self._depths.get(base, 0)
         # 创建副本实例,注入 fanout_payload / depth / output_dir
@@ -341,6 +398,7 @@ class Runner:
             for dn in original_downstream:
                 new_edges.append(Edge(from_=rid, to=dn))
         self.flow.edges = new_edges
+        self._rebuild_adjacency()
 
     async def _run_one(self, sid: str, queue: asyncio.Queue) -> None:
         """跑单个节点:accept → run → deliver / FanOut,事件推入 queue。完成推 None。"""
@@ -382,7 +440,7 @@ class Runner:
 
         # 动态扇出:run 返回 FanOut,扩图,本节点不产 artifact
         if isinstance(result, FanOut):
-            self.state.steps[sid].status = "done"
+            self.state.steps[sid].status = StepStatus.DONE
             self._expand_fanout(sid, result)
             await queue.put(
                 trace(sid, "done", f"扇出 {result.n} 个 {result.base} 副本")
@@ -420,23 +478,41 @@ class Runner:
                 st = self.state.steps[sid]
                 # checkpoint AFTER 暂停:artifact 已写入,确认后转 done
                 # break_before 暂停:artifact 为 None,转 idle 让下一轮重新就绪执行
-                st.status = "done" if st.artifact is not None else "idle"
-            self.state.status = "running"
+                st.status = StepStatus.DONE if st.artifact is not None else StepStatus.IDLE
+            self.state.status = JobStatus.RUNNING
         elif ctrl.kind == "retry":
             ds = self._downstream(ctrl.from_step or "")
             for s2 in ds:
                 self.artifacts.pop(s2, None)
                 st = self.state.steps.get(s2)
                 if st:
-                    st.status = "idle"
+                    st.status = StepStatus.IDLE
                     st.artifact = None
                 # debug 模式:清磁盘 artifact.json,防止下次启动加载到旧产物
                 if self.debug:
                     art_file = self.job_dir / s2 / _ARTIFACT_FILE
                     art_file.unlink(missing_ok=True)
-            self.state.status = "running"
+            self.state.status = JobStatus.RUNNING
         elif ctrl.kind == "abort":
             self._aborted = True
+
+    def _apply_load_strategy(self, args: _RunArgs) -> None:
+        """按 _RunArgs.load_strategy 处理 job_dir 持久化产物,run() 开头调用一次。
+
+        load_all:                       全量加载,已完成节点跳过
+        load_skip_target:               加载但跳过 target(scope 单点调试反复执行 X)
+        invalidate_all:                 清掉所有节点状态与产物(--out 全跑)
+        load_skip_target_then_invalidate:加载跳过 target 后再清 target(from_steps 续跑)
+        """
+        if args.load_strategy == "load_all":
+            self._load_persisted_artifacts()
+        elif args.load_strategy == "load_skip_target":
+            self._load_persisted_artifacts(skip=args.target)
+        elif args.load_strategy == "invalidate_all":
+            self._invalidate_steps(set(self.steps))
+        elif args.load_strategy == "load_skip_target_then_invalidate":
+            self._load_persisted_artifacts(skip=args.target)
+            self._invalidate_steps(args.target or set())
 
     async def run(
         self,
@@ -454,38 +530,20 @@ class Runner:
         break_before 指定时,这些节点就绪后不立即执行,先 emit checkpoint 暂停,
         等 resume 信号才转 idle 重新就绪执行——用于 view 在指定节点前停下来观察。
         """
-        if from_steps is not None:
-            if not self._persist_artifacts:
-                raise RuntimeError("from_steps 需要可复用的 artifact 目录")
-            target: set[str] = set()
-            for sid in from_steps:
-                target |= self._downstream(sid)
-            self._target = target
-        elif scope is not None:
-            self._target = set(scope)
-        elif only is not None:
-            self._target = self._required(only)
-        else:
-            self._target = None
-        self._break_before = set(break_before) if break_before else None
+        args = _parse_run_args(
+            only, break_before, scope, from_steps,
+            self._persist_artifacts, self._explicit_job_dir,
+            self._downstream, self._required,
+        )
+        self._target = args.target
+        self._break_before = set(args.break_before) if args.break_before else None
         self._break_triggered = False
         for sid in self.steps:
             if sid not in self.state.steps:
                 self.state.steps[sid] = StepState(step_id=sid)
-        self.state.status = "running"
+        self.state.status = JobStatus.RUNNING
         self.state.finished = False
-        # 持久化模式:加载上次持久化产物,已完成节点跳过,单调试/续跑复用上游
-        # scope 模式:scope 内节点不加载产物,强制重跑(单点调试反复执行 X)
-        # from_steps 模式:目标闭包不加载,并清理旧产物,强制重跑本节点及下游
-        if from_steps is not None:
-            self._load_persisted_artifacts(skip=self._target)
-            self._invalidate_steps(self._target or set())
-        elif scope is not None:
-            self._load_persisted_artifacts(skip=self._target)
-        elif self._explicit_job_dir:
-            self._invalidate_steps(set(self.steps))
-        else:
-            self._load_persisted_artifacts()
+        self._apply_load_strategy(args)
 
         while True:
             if self._aborted:
@@ -516,7 +574,7 @@ class Runner:
                     self._break_triggered = True
                     to_run = [sid for sid in to_run if sid not in self._break_before]
                     for sid in hits:
-                        self.state.steps[sid].status = "paused"
+                        self.state.steps[sid].status = StepStatus.PAUSED
                         yield checkpoint(sid, None)
                         apply_event(self.state, checkpoint(sid, None))
 
