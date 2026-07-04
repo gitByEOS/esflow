@@ -1,4 +1,4 @@
-"""review 节点:全部收卷后老师统一验收,checkpoint AFTER 等确认。
+"""review 节点:全部收卷后老师统一验收,checkpoint TO_HUMAN 等确认。
 
 按 r = 验收通过,老师离场;e = 退回重做(从 review 重跑);a = 中止考试。
 """
@@ -9,7 +9,7 @@ from esflow import Node, Checkpoint
 class Review(Node):
     id = "review"
     title = "老师统一验收"
-    checkpoint = Checkpoint.AFTER
+    checkpoint = Checkpoint.TO_HUMAN
 
     def accept(self, ctx) -> bool:
         # 接手:至少一个学生已交卷

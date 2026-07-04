@@ -222,7 +222,7 @@ def test_retry_dynamic_replica(tmp_path: Path):
         "from esflow import Node, Checkpoint\n"
         "class M(Node):\n"
         "    id='m'\n"
-        "    checkpoint=Checkpoint.AFTER\n"
+        "    checkpoint=Checkpoint.TO_HUMAN\n"
         "    def run(self, ctx): return {'all': ctx.gather('w')}\n",
         encoding="utf-8",
     )

@@ -53,7 +53,7 @@ TraceStatus = Literal["queued", "running", "done", "error", "skipped"]
 |---|---|---|
 | `trace` | 节点状态变更（`queued`/`running`/`done`/`error`/`skipped`） | runner 推进节点状态时 |
 | `delta` | 节点产出增量文本 | 目前 runner **不产出** delta 事件,事件类型保留供未来 streaming 节点使用;事件消费代码应忽略或累积 `text` 字段 |
-| `checkpoint` | 节点到暂停点，等外部 `resume`/`retry`/`abort` | `checkpoint AFTER` 节点 `run` 完成后；`break_before` 节点就绪后 |
+| `checkpoint` | 节点到暂停点，等外部 `resume`/`retry`/`abort` | `checkpoint TO_HUMAN` 节点 `run` 完成后；`TO_AGENT` 节点就绪后；`break_before` 节点就绪后 |
 | `final` | 节点最终 artifact | `run` 完成、`deliver` 通过后 |
 | `error` | 错误（含接手/脱手确认失败、节点异常、`aborted`） | `accept`/`run`/`deliver` 异常或返回 `False`、`abort()` |
 | `end` | job 结束 | 无就绪节点、error 后、abort 后 |
@@ -65,12 +65,12 @@ TraceStatus = Literal["queued", "running", "done", "error", "skipped"]
 ```text
 trace(queued)  →  trace(running)  →  [checkpoint]  →  final  →  (下一轮)
                                   ↑                ↑
-                            break_before       Checkpoint.AFTER
+                            break_before       Checkpoint.TO_HUMAN
                             (run 前暂停)        (run 后暂停)
 ```
 
 - 无暂停点时：`trace(queued) → trace(running) → final`
-- `break_before + Checkpoint.AFTER` 共存：**发两次** checkpoint
+- `break_before + Checkpoint.TO_HUMAN` 共存：**发两次** checkpoint
   - run 前：`trace(queued) → trace(running) → checkpoint(artifact=None)` → resume → run 执行
   - run 后：`trace(running) → checkpoint(artifact=值)` → resume → `final`
 - `accept` 抛异常：`trace(queued) → error → end`(无 running)

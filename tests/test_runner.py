@@ -82,7 +82,7 @@ def test_load_quickstart_flow():
     flow, runs, _ = load_flow(str(EXAMPLE))
     assert flow.id == "quickstart_flow"
     assert set(runs.keys()) == {"fetch", "process", "review", "export"}
-    assert runs["review"].checkpoint == Checkpoint.AFTER
+    assert runs["review"].checkpoint == Checkpoint.TO_HUMAN
 
 
 def test_run_full_flow_with_auto_resume():
@@ -259,6 +259,50 @@ def test_node_error_propagates(tmp_path: Path):
     assert runner.state.status == "error"
 
 
+def test_node_error_attrs_propagated(tmp_path: Path):
+    """节点抛带属性的自定义异常,error event 的 exc_attrs 透传 __dict__;裸 Exception 为 None。"""
+    flow_dir = tmp_path / "err"
+    (flow_dir / "nodes").mkdir(parents=True)
+    (flow_dir / "flow.py").write_text(
+        "from esflow import flow, edge\n"
+        "@flow(id='err')\n"
+        "class F:\n"
+        "    nodes=['custom', 'plain']\n"
+        "    edges=[]\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "custom.py").write_text(
+        "from esflow import Node\n"
+        "class CliError(Exception):\n"
+        "    def __init__(self, code, message, retryable=False):\n"
+        "        super().__init__(message)\n"
+        "        self.code = code\n"
+        "        self.exit_code = code + 2\n"
+        "        self.retryable = retryable\n"
+        "class Custom(Node):\n"
+        "    id='custom'\n"
+        "    def run(self, ctx):\n"
+        "        raise CliError(3, '必须传入 input', retryable=True)\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "plain.py").write_text(
+        "from esflow import Node\n"
+        "class Plain(Node):\n"
+        "    id='plain'\n"
+        "    def run(self, ctx):\n"
+        "        raise ValueError('裸异常')\n",
+        encoding="utf-8",
+    )
+    runner = Runner.load(str(flow_dir))
+    events = _collect_events(runner)
+
+    custom_err = next(e for e in events if e.type == "error" and e.run_id == "custom")
+    assert custom_err.exc_attrs == {"code": 3, "exit_code": 5, "retryable": True}
+
+    plain_err = next(e for e in events if e.type == "error" and e.run_id == "plain")
+    assert plain_err.exc_attrs is None
+
+
 def test_cycle_detected(tmp_path: Path):
     flow_dir = tmp_path / "cyc"
     (flow_dir / "nodes").mkdir(parents=True)
@@ -280,3 +324,175 @@ def test_cycle_detected(tmp_path: Path):
         )
     with pytest.raises(FlowLoadError, match="有环"):
         load_flow(str(flow_dir))
+
+
+# —— TO_AGENT checkpoint:agent 介入链路 ——
+
+def _build_agent_flow(tmp_path: Path) -> Path:
+    """构造 fetch → agent_summary (TO_AGENT) → export 的临时 flow。"""
+    flow_dir = tmp_path / "agent_flow"
+    (flow_dir / "nodes").mkdir(parents=True)
+    (flow_dir / "flow.py").write_text(
+        "from esflow import flow, edge\n"
+        "@flow(id='agent_flow')\n"
+        "class F:\n"
+        "    nodes=['fetch', 'agent_summary', 'export']\n"
+        "    edges=[edge('fetch', 'agent_summary'), edge('agent_summary', 'export')]\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "fetch.py").write_text(
+        "from esflow import Node\n"
+        "class Fetch(Node):\n"
+        "    id='fetch'\n"
+        "    def run(self, ctx):\n"
+        "        return {'prompt': '总结以下内容', 'text': 'hello world'}\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "agent_summary.py").write_text(
+        "from esflow import Node, Checkpoint\n"
+        "class AgentSummary(Node):\n"
+        "    id='agent_summary'\n"
+        "    checkpoint=Checkpoint.TO_AGENT\n"
+        "    def deliver(self, artifact) -> bool:\n"
+        "        return 'summary.txt' in artifact.get('files', [])\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "export.py").write_text(
+        "from esflow import Node\n"
+        "class Export(Node):\n"
+        "    id='export'\n"
+        "    def run(self, ctx):\n"
+        "        agent_art = ctx.get('agent_summary')\n"
+        "        return {'exported': True, 'files': agent_art['files']}\n",
+        encoding="utf-8",
+    )
+    return flow_dir
+
+
+def _drive_no_resume(runner: Runner) -> list[JobEvent]:
+    """跑 runner,checkpoint 时不 resume(TO_AGENT 路径用),返回事件列表。"""
+    events: list[JobEvent] = []
+
+    async def drive():
+        async for ev in runner.run():
+            events.append(ev)
+
+    asyncio.run(drive())
+    return events
+
+
+def test_to_agent_first_run_emits_checkpoint_and_exits(tmp_path: Path):
+    """首次跑到 TO_AGENT 节点:emit checkpoint,主循环退出,不 emit end。"""
+    flow_dir = _build_agent_flow(tmp_path)
+    out_dir = tmp_path / "run"
+    runner = Runner.load(str(flow_dir), job_dir=out_dir)
+
+    events = _drive_no_resume(runner)
+
+    types = [e.type for e in events]
+    assert "checkpoint" in types
+    # TO_AGENT checkpoint 后主循环退出,不 emit end
+    assert "end" not in types
+    ckpt = next(e for e in events if e.type == "checkpoint")
+    assert ckpt.run_id == "agent_summary"
+    # checkpoint artifact = 上游产物集合
+    assert ckpt.artifact == {"fetch": {"prompt": "总结以下内容", "text": "hello world"}}
+    # agent_summary PAUSED,_break_to_agent.json 已写
+    assert runner.state.runs["agent_summary"].status == "paused"
+    assert runner.has_break_to_agent()
+    assert runner.pending_break_to_agent() == ["agent_summary"]
+    # agent_summary/artifact.json 不存在(产物由 agent 写)
+    assert not (out_dir / "agent_summary" / ARTIFACT_FILE).exists()
+    # fetch 已完成,export 未跑
+    assert runner.state.runs["fetch"].status == "done"
+    assert runner.state.runs["export"].status == "idle"
+
+
+def test_to_agent_resume_after_agent_writes_files(tmp_path: Path):
+    """agent 写 summary.txt 后 --resume:扫文件构造 artifact + deliver 通过 + 跑下游。"""
+    flow_dir = _build_agent_flow(tmp_path)
+    out_dir = tmp_path / "run"
+
+    first = Runner.load(str(flow_dir), job_dir=out_dir)
+    _drive_no_resume(first)
+
+    # 模拟 agent 写产物文件
+    (out_dir / "agent_summary").mkdir(parents=True, exist_ok=True)
+    (out_dir / "agent_summary" / "summary.txt").write_text("这是摘要", encoding="utf-8")
+
+    # --resume:新 Runner 实例,从 job_dir 加载 + 跑
+    second = Runner.load(str(flow_dir), job_dir=out_dir)
+    events: list[JobEvent] = []
+
+    async def drive_second():
+        async for ev in second.run(resume=True):
+            events.append(ev)
+
+    asyncio.run(drive_second())
+
+    types = [e.type for e in events]
+    assert types[-1] == "end"
+    assert second.state.runs["agent_summary"].status == "done"
+    assert second.state.runs["export"].status == "done"
+    # _break_to_agent.json 被清
+    assert not second.has_break_to_agent()
+    # agent_summary artifact.json 已构造
+    art = json.loads((out_dir / "agent_summary" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    assert art["files"] == ["summary.txt"]
+    assert "output_dir" in art
+    # export 拿到 agent_summary artifact
+    assert second.artifacts["export"]["files"] == ["summary.txt"]
+
+
+def test_to_agent_deliver_rejects_wrong_files(tmp_path: Path):
+    """agent 写了无关文件(deliver 不通过):emit error,节点标 error。"""
+    flow_dir = _build_agent_flow(tmp_path)
+    out_dir = tmp_path / "run"
+
+    first = Runner.load(str(flow_dir), job_dir=out_dir)
+    _drive_no_resume(first)
+
+    # agent 写了 wrong.txt(不是 summary.txt)
+    (out_dir / "agent_summary").mkdir(parents=True, exist_ok=True)
+    (out_dir / "agent_summary" / "wrong.txt").write_text("写错了", encoding="utf-8")
+
+    second = Runner.load(str(flow_dir), job_dir=out_dir)
+    events: list[JobEvent] = []
+
+    async def drive_second():
+        async for ev in second.run(resume=True):
+            events.append(ev)
+
+    asyncio.run(drive_second())
+
+    types = [e.type for e in events]
+    assert "error" in types
+    err = next(e for e in events if e.type == "error" and e.run_id == "agent_summary")
+    assert "deliver" in (err.message or "")
+    assert second.state.runs["agent_summary"].status == "error"
+    # _break_to_agent.json 仍存在(未完成)
+    assert second.has_break_to_agent()
+
+
+def test_to_agent_resume_without_break_to_agent_errors(tmp_path: Path):
+    """--resume 但 job_dir 无 _break_to_agent.json:has_break_to_agent 返回 False。"""
+    flow_dir = _build_agent_flow(tmp_path)
+    out_dir = tmp_path / "run"
+    # 跑完整流程(模拟 agent 已写产物 + resume 完成),_break_to_agent.json 被清
+    first = Runner.load(str(flow_dir), job_dir=out_dir)
+    _drive_no_resume(first)
+    (out_dir / "agent_summary").mkdir(parents=True, exist_ok=True)
+    (out_dir / "agent_summary" / "summary.txt").write_text("摘要", encoding="utf-8")
+
+    second = Runner.load(str(flow_dir), job_dir=out_dir)
+
+    async def drive_second():
+        async for _ in second.run(resume=True):
+            pass
+
+    asyncio.run(drive_second())
+    assert not second.has_break_to_agent()
+
+    # 第三次再 load:无 _break_to_agent.json,has_break_to_agent 应为 False
+    third = Runner.load(str(flow_dir), job_dir=out_dir)
+    assert not third.has_break_to_agent()

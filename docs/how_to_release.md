@@ -60,7 +60,7 @@ python3 -m venv /tmp/esflow-user-test
 2. 更新 `pyproject.toml` 版本号
 3. 执行 `bash tools/build.sh`
 4. 用临时虚拟环境安装 `dist/*.whl`
-5. 创建 git tag,例如 `v0.1.0-alpha`
+5. 创建 git tag,例如 `v0.1.0`
 6. 上传 `dist/*` 到目标仓库
 
 ## 回滚策略

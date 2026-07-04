@@ -3,7 +3,7 @@
 事件类型:
 - trace:      节点状态变更(queued/running/done/error/skipped)
 - delta:      节点产出增量文本
-- checkpoint: 节点跑到暂停点,等外部确认(resume/retry)
+- checkpoint: 节点跑到暂停点(TO_HUMAN 等 resume/retry/abort,TO_AGENT 等外部 agent 写产物 + --resume)
 - final:      节点最终 artifact
 - error:      错误
 - end:        job 结束
@@ -38,6 +38,8 @@ class JobEvent:
     artifact: Any | None = None
     # error
     message: str | None = None
+    # error 透传异常 __dict__(裸 Exception 为 None,run.py 可读 attrs["code"] 还原错误码)
+    exc_attrs: dict[str, Any] | None = None
 
 
 # 构造便捷函数
@@ -58,8 +60,8 @@ def final(run_id: str, artifact: Any) -> JobEvent:
     return JobEvent(type="final", run_id=run_id, artifact=artifact)
 
 
-def error(run_id: str | None, message: str) -> JobEvent:
-    return JobEvent(type="error", run_id=run_id, message=message)
+def error(run_id: str | None, message: str, exc_attrs: dict[str, Any] | None = None) -> JobEvent:
+    return JobEvent(type="error", run_id=run_id, message=message, exc_attrs=exc_attrs)
 
 
 def end() -> JobEvent:
@@ -69,18 +71,19 @@ def end() -> JobEvent:
 def esflow_event(event: JobEvent) -> None:
     """按事件类型打印一行,cli / skill run.py / view 共用的统一消费入口。
 
-    checkpoint 只打印 artifact,不打印交互提示(交互由调用方自行处理)。
+    所有输出走 stderr,保留 stdout 给管道数据。checkpoint 只打印 artifact,
+    不打印交互提示(交互由调用方自行处理)。
     """
     if event.type == "trace":
-        print(f"[{event.run_id}] {event.status}: {event.detail}")
+        print(f"[{event.run_id}] {event.status}: {event.detail}", file=sys.stderr)
     elif event.type == "delta":
-        print(f"[{event.run_id}] {event.text}", end="")
+        print(f"[{event.run_id}] {event.text}", end="", file=sys.stderr)
     elif event.type == "checkpoint":
-        print(f"\n[checkpoint] {event.run_id} artifact:")
-        print(json.dumps(event.artifact, ensure_ascii=False, indent=2, default=str))
+        print(f"\n[checkpoint] {event.run_id} artifact:", file=sys.stderr)
+        print(json.dumps(event.artifact, ensure_ascii=False, indent=2, default=str), file=sys.stderr)
     elif event.type == "final":
-        print(f"[{event.run_id}] artifact: {event.artifact}")
+        print(f"[{event.run_id}] artifact: {event.artifact}", file=sys.stderr)
     elif event.type == "error":
         print(f"[error] {event.run_id}: {event.message}", file=sys.stderr)
     elif event.type == "end":
-        print("[end]")
+        print("[end]", file=sys.stderr)

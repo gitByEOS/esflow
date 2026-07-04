@@ -11,10 +11,15 @@
     async for event in runner.run(only={"worker#2"}):
         ...
 
+    # TO_AGENT 续跑:agent 已写产物,加载所有产物 + 跑 pending + 下游
+    async for event in runner.run(resume=True):
+        ...
+
 并行:同一轮就绪节点 asyncio.gather 并行,同步 run 用 to_thread 包。
 接手确认(accept)返回 False → 跳过本节点(emit skipped,artifact 置 None,下游可推进)。
 脱手确认(deliver)run 后校验,失败 emit error。
-checkpoint 时整个 job 暂停,等控制信号。
+checkpoint TO_HUMAN 时整个 job 暂停 stdin 等控制信号;TO_AGENT 时 emit checkpoint 退出进程,
+等外部 agent 写产物到 output_dir 后用 --resume 续跑(框架扫文件构造 artifact + deliver 校验)。
 动态扇出:节点 run 返回 FanOut,runner 运行时创建副本 + 动态连边。
 retry 时不重跑已完成且无依赖变更的上游,只重跑 from_node 及其下游。
 from_depth 按拓扑深度续跑:重跑 depth >= N 的所有节点,上游 depth < N 复用。
@@ -40,6 +45,7 @@ from .node import Checkpoint, FanOut, Node, DepthScope, _instantiate
 DEFAULT_OUTPUT_ROOT = Path("/tmp/esflow/outputs")
 DEBUG_OUTPUT_ROOT = Path("/tmp/esflow/debug")
 _ARTIFACT_FILE = "artifact.json"
+_BREAK_TO_AGENT_FILE = "_break_to_agent.json"
 
 
 def _gen_job_id() -> str:
@@ -83,16 +89,20 @@ def _parse_run_args(
     downstream: Callable[[str], set[str]],
     required: Callable[[set[str]], set[str]],
     target_by_depth: Callable[[int], set[str]],
+    resume: bool = False,
 ) -> _RunArgs:
     """把 run() 的 5 个互斥入参解析成统一的 _RunArgs。
 
-    优先级:from_node > from_depth > nodes > only > 默认。各模式推导 target 与加载策略:
+    优先级:resume > from_node > from_depth > nodes > only > 默认。各模式推导 target 与加载策略:
+    - resume:     target = None,load_all(--resume 续跑:加载所有产物,跑 pending to_agent + 下游)
     - from_node:  target = from_node 下游,加载跳过 target 后再清 target(续跑)
     - from_depth: target = depth >= from_depth 的节点,加载跳过 target 后再清 target(按层续跑)
     - nodes:      target = nodes 本身,加载跳过 target(单点调试上游复用)
     - only:       target = only 及其上游,全量加载(跑必需闭包)
     - 默认:       target = None,explicit_job_dir 时清全部,否则全量加载
     """
+    if resume:
+        return _RunArgs(None, break_before, "load_all")
     if from_node is not None:
         if not persist_artifacts:
             raise RuntimeError("from_node 需要可复用的 artifact 目录")
@@ -112,6 +122,9 @@ def _parse_run_args(
     return _RunArgs(None, break_before, "load_all")
 
 
+_MISSING = object()
+
+
 class _Ctx:
     """运行时 DepthScope 实现:取上游 artifact + 动态扇出 gather + 同层/跨层 layer。
 
@@ -128,9 +141,12 @@ class _Ctx:
         self._artifacts = artifacts
         self._depths = depths
 
-    def get(self, upstream_id: str) -> Any:
+    def get(self, upstream_id: str, default: Any = _MISSING) -> Any:
+        """取上游 artifact。未完成时:未传 default 抛 KeyError,传了则返回 default。"""
         if upstream_id not in self._artifacts:
-            raise KeyError(f"上游节点尚未完成:{upstream_id}")
+            if default is _MISSING:
+                raise KeyError(f"上游节点尚未完成:{upstream_id}")
+            return default
         return self._artifacts[upstream_id]
 
     def upstream_ids(self) -> list[str]:
@@ -320,6 +336,57 @@ class Runner:
             if self._persist_artifacts:
                 shutil.rmtree(self.job_dir / rid, ignore_errors=True)
 
+    def _break_to_agent_path(self) -> Path:
+        return self.job_dir / _BREAK_TO_AGENT_FILE
+
+    def _write_break_to_agent(self, rid: str) -> None:
+        """首次跑到 TO_AGENT 节点:把 pending 节点 id 追加到 _break_to_agent.json。"""
+        path = self._break_to_agent_path()
+        pending: list[str] = []
+        if path.exists():
+            try:
+                pending = json.loads(path.read_text(encoding="utf-8")).get("pending", [])
+            except (OSError, json.JSONDecodeError):
+                pending = []
+        if rid not in pending:
+            pending.append(rid)
+        path.write_text(
+            json.dumps({"pending": pending}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _clear_break_to_agent(self, rid: str) -> None:
+        """--resume 完成 TO_AGENT 节点后:从 _break_to_agent.json 移除。空了删文件。"""
+        path = self._break_to_agent_path()
+        if not path.exists():
+            return
+        try:
+            pending = json.loads(path.read_text(encoding="utf-8")).get("pending", [])
+        except (OSError, json.JSONDecodeError):
+            pending = []
+        pending = [r for r in pending if r != rid]
+        if pending:
+            path.write_text(
+                json.dumps({"pending": pending}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        else:
+            path.unlink(missing_ok=True)
+
+    def has_break_to_agent(self) -> bool:
+        """启动时检测:job_dir 下是否有未完成的 TO_AGENT 节点。"""
+        return self._break_to_agent_path().exists()
+
+    def pending_break_to_agent(self) -> list[str]:
+        """返回 _break_to_agent.json 里 pending 的 TO_AGENT 节点 id 列表。"""
+        path = self._break_to_agent_path()
+        if not path.exists():
+            return []
+        try:
+            return json.loads(path.read_text(encoding="utf-8")).get("pending", [])
+        except (OSError, json.JSONDecodeError):
+            return []
+
     def _downstream(self, from_node: str) -> set[str]:
         """from_node 及其所有下游(含自己)。"""
         result = {from_node}
@@ -429,11 +496,47 @@ class Runner:
         await queue.put(trace(rid, "running", f"开始:{node.title or node.id}"))
         ctx = _Ctx(self.artifacts, depths=self._depths)
 
+        # TO_AGENT 节点:不调 run,产物由外部 agent 写入 output_dir
+        # 首次跑(无产物文件):emit checkpoint + 设 PAUSED + 写 _break_to_agent.json,进程由主循环退出
+        # --resume(有产物文件):扫文件构造 artifact + deliver 校验 + 转 DONE,跑下游
+        if node.checkpoint == Checkpoint.TO_AGENT:
+            node.output_dir.mkdir(parents=True, exist_ok=True)
+            files = [
+                f.name for f in node.output_dir.iterdir()
+                if f.name != _ARTIFACT_FILE and not f.name.startswith(".")
+            ]
+            if files:
+                artifact = {"output_dir": str(node.output_dir), "files": sorted(files)}
+                try:
+                    ok = node.deliver(artifact)
+                except Exception as exc:
+                    await queue.put(error(rid, f"to_agent deliver 异常:{type(exc).__name__}: {exc}",
+                                          getattr(exc, "__dict__", {}) or None))
+                    await queue.put(None)
+                    return
+                if not ok:
+                    await queue.put(error(rid, "to_agent deliver 校验失败:产物不合规"))
+                    await queue.put(None)
+                    return
+                self.artifacts[rid] = artifact
+                self._persist_artifact(rid, artifact)
+                self._clear_break_to_agent(rid)
+                await queue.put(final(rid, artifact))
+            else:
+                upstream = self._upstream_map.get(rid, [])
+                upstream_artifacts = {uid: self.artifacts.get(uid) for uid in upstream}
+                self.state.runs[rid].status = NodeStatus.PAUSED
+                self._write_break_to_agent(rid)
+                await queue.put(checkpoint(rid, upstream_artifacts))
+            await queue.put(None)
+            return
+
         # 接手确认:返回 False 表示不接手,跳过本节点(artifact 置 None,下游可推进)
         try:
             ok = node.accept(ctx)
         except Exception as exc:
-            await queue.put(error(rid, f"接手确认异常:{type(exc).__name__}: {exc}"))
+            await queue.put(error(rid, f"接手确认异常:{type(exc).__name__}: {exc}",
+                                  getattr(exc, "__dict__", {}) or None))
             await queue.put(None)
             return
         if not ok:
@@ -450,7 +553,8 @@ class Runner:
         try:
             result = await asyncio.to_thread(node.run, ctx)
         except Exception as exc:
-            await queue.put(error(rid, f"{type(exc).__name__}: {exc}"))
+            await queue.put(error(rid, f"{type(exc).__name__}: {exc}",
+                                  getattr(exc, "__dict__", {}) or None))
             await queue.put(None)
             return
 
@@ -468,7 +572,8 @@ class Runner:
         try:
             ok = node.deliver(result)
         except Exception as exc:
-            await queue.put(error(rid, f"脱手确认异常:{type(exc).__name__}: {exc}"))
+            await queue.put(error(rid, f"脱手确认异常:{type(exc).__name__}: {exc}",
+                                  getattr(exc, "__dict__", {}) or None))
             await queue.put(None)
             return
         if not ok:
@@ -479,7 +584,7 @@ class Runner:
         self.artifacts[rid] = result
         self._persist_artifact(rid, result)
         await queue.put(final(rid, result))
-        if node.checkpoint == Checkpoint.AFTER:
+        if node.checkpoint == Checkpoint.TO_HUMAN:
             await queue.put(checkpoint(rid, result))
         await queue.put(None)
 
@@ -492,7 +597,7 @@ class Runner:
         if ctrl is None or ctrl.kind == "resume":
             for rid in self._paused_nodes():
                 st = self.state.runs[rid]
-                # checkpoint AFTER 暂停:artifact 已写入,确认后转 done
+                # checkpoint TO_HUMAN 暂停:artifact 已写入,确认后转 done
                 # break_before 暂停:artifact 为 None,转 idle 让下一轮重新就绪执行
                 st.status = NodeStatus.DONE if st.artifact is not None else NodeStatus.IDLE
             self.state.status = JobStatus.RUNNING
@@ -537,6 +642,7 @@ class Runner:
         nodes: set[str] | None = None,
         from_node: str | None = None,
         from_depth: int | None = None,
+        resume: bool = False,
     ) -> AsyncGenerator[JobEvent, None]:
         """执行 flow,产出事件流。
 
@@ -545,8 +651,14 @@ class Runner:
         节点不就绪——debug --node 用,上游从磁盘加载产物,只反复跑指定节点。
         from_node 指定时只重跑该节点及下游,上游从 job_dir artifact.json 复用。
         from_depth 指定时重跑 depth >= from_depth 的所有节点,上游 depth < from_depth 复用。
+        resume=True 时加载所有已有产物(--resume 续跑 TO_AGENT 节点),不 invalidate。
         break_before 指定时,这些节点就绪后不立即执行,先 emit checkpoint 暂停,
         等 resume 信号才转 idle 重新就绪执行——用于 view 在指定节点前停下来观察。
+
+        TO_AGENT 节点(checkpoint=Checkpoint.TO_AGENT)就绪时不调 run,
+        emit checkpoint(artifact=上游产物集合)+ 写 _break_to_agent.json + 主循环退出。
+        外部 agent 写产物文件到 output_dir 后,用 --resume 续跑:
+        框架扫文件构造 artifact={"output_dir", "files"},调 deliver 校验,通过则转 DONE。
         """
         if from_depth is not None and (from_depth < 0 or from_depth > self.max_depth):
             raise RuntimeError(
@@ -556,6 +668,7 @@ class Runner:
             only, break_before, nodes, from_node, from_depth,
             self._persist_artifacts, self._explicit_job_dir,
             self._downstream, self._required, self._target_by_depth,
+            resume=resume,
         )
         self._target = args.target
         self._break_before = set(args.break_before) if args.break_before else None
@@ -625,6 +738,9 @@ class Runner:
 
             # 有节点暂停则等信号,不继续跑下游
             if self._paused_nodes():
+                # TO_AGENT checkpoint:进程退出,等外部 agent 写产物 + --resume
+                if self.has_break_to_agent():
+                    return
                 await self._await_control()
                 continue
 

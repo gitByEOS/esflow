@@ -2,6 +2,21 @@
 
 本项目遵循语义化版本思路。`0.x` 阶段 API 仍可能调整,破坏性变更会在对应版本中说明。
 
+## 0.1.1
+
+`Checkpoint.AFTER` 重命名为 `Checkpoint.TO_HUMAN`,新增 `Checkpoint.TO_AGENT` 支持 AI agent 介入。
+
+### 破坏性变更
+
+- `Checkpoint.AFTER` → `Checkpoint.TO_HUMAN`(value `"after"` → `"to_human"`)
+
+### 新增功能
+
+- `Checkpoint.TO_AGENT`:节点不实现 `run`,框架就绪时 emit checkpoint 退出进程(exit 2),
+- `examples/agent_flow/`:TO_AGENT 链路示例
+- CLI `esflow run --resume <job_dir>`:续跑 TO_AGENT 节点
+- CLI 返回码:`0` end / `1` error / `2` 待 agent / `130` Ctrl+C
+
 ## 0.1.0
 
 首个正式版本。PyPI 包名 `esflow`。
@@ -22,15 +37,3 @@
 - 标准库 HTML view,展示 DAG、节点状态、artifact、事件流
 - `pass_check` 启动预检,失败带 `fix` 修复指引
 - 示例 flow 与测试覆盖
-
-### 文档
-
-- `docs/cli.md`:子命令 × flag × 等价库式调用全参数矩阵
-- `docs/ref/Runner.md` 表格加 "CLI flag" + "典型场景" 列,明确 `only` vs `nodes` 区别
-- `docs/ref/DepthScope.md` 用户视角三类能力,`ctx.get` 三状态行为表格化,`gather` vs `upstream_ids` 选择指引
-- `docs/ref/FlowDefine.md` `serial` 提升为"调度策略"独立小节,补 `accept=False` fallback 完整示例,静态副本边展开示例
-- `docs/ref/Checkpoint.md` "两种暂停点来源"对比表,`break_before + AFTER` 共存时发两次 checkpoint
-- `docs/ref/JobEvent.md` 节点生命周期事件时序图,`TraceStatus`/`NodeStatus` 关系,`delta` 当前不产,`FanOut` 节点不 emit `final`
-- `docs/ref/Node.md` `accept`/`deliver` 对照表 "False → skip vs error" 后果差异,静态副本 `self.index` 切片示例
-- `docs/quickstart.md` 统一目录结构说明,`esflow run` vs `python run.py` 选择
-- `docs/artifacts.md` `--from` 措辞与 `Runner.md` 统一,明说必须搭配 `--out`

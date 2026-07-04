@@ -92,7 +92,7 @@ from esflow import Node, Checkpoint
 
 class GenSrt(Node):
     id = "gen_srt"
-    checkpoint = Checkpoint.AFTER
+    checkpoint = Checkpoint.TO_HUMAN
 
     def accept(self, ctx) -> bool:
         return Path(ctx.get("fetch")["video"]).exists()

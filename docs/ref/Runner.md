@@ -67,11 +67,11 @@ runner = Runner.load("./my_flow", job_dir=Path("./runs/a"))
 
 ## 执行方法
 
-### `run(only=None, break_before=None, nodes=None, from_node=None, from_depth=None) -> AsyncGenerator[JobEvent]`
+### `run(only=None, break_before=None, nodes=None, from_node=None, from_depth=None, resume=False) -> AsyncGenerator[JobEvent]`
 
-执行 flow，产出事件流。`run` 接 5 个参数，分两类：
+执行 flow，产出事件流。`run` 接 6 个参数，分两类：
 
-- **目标参数 4 个，互斥**（优先级 `from_node > from_depth > nodes > only`）：决定跑哪些节点 + 如何处理已有产物
+- **目标参数 5 个，互斥**（优先级 `resume > from_node > from_depth > nodes > only`）：决定跑哪些节点 + 如何处理已有产物
 - **修饰参数 1 个**：`break_before`，可与任意目标参数组合，在指定节点就绪后暂停等 `resume`
 
 | 目标参数 | CLI flag | 典型场景 | 行为 | 加载策略（用户视角） |
@@ -81,6 +81,7 @@ runner = Runner.load("./my_flow", job_dir=Path("./runs/a"))
 | `nodes={"X"}` | `debug --node X` | debug 模式上游已落产物,只重跑 X 本身 | 只跑 X 本身，上游必须已完成 | 加载已有产物，但跳过 X 强制重跑（单点调试） |
 | `from_node="X"` | `run --from X` | 改了 X,从 X 续跑到末端 | 重跑 X 及其下游，上游复用 | 加载已有产物跳过 X 及下游，再清掉 X 及下游重跑 |
 | `from_depth=N` | `run --from-depth N` | 改了 depth>=N 的节点,按层续跑 | 重跑 `depth >= N` 的所有节点，上游 `depth < N` 复用 | 加载已有产物跳过 `depth>=N`，再清掉这些节点重跑 |
+| `resume=True` | `run --resume DIR` | TO_AGENT 节点 agent 写产物后续跑 | 加载所有已有产物,跑 pending TO_AGENT + 下游 | 全量加载(不 invalidate),TO_AGENT 节点扫文件构造 artifact |
 | `break_before={"X"}` | （库式独有,`debug --node` 内部已含） | 调试时在 X 前暂停观察上游产物 | X 就绪后不立即执行，emit `checkpoint` 暂停等 `resume` | —— |
 
 CLI flag 与库式的完整对照（含 `--out`/`--clear`/`view`/`new`）见 [cli.md](../cli.md)。
@@ -125,7 +126,7 @@ checkpoint 暂停时外部调用，唤醒等待中的 `run()`。
 
 ### `resume() -> None`
 
-确认继续。paused 节点转 done（`checkpoint AFTER`）或转 idle（`break_before`），跑下一轮就绪节点。
+确认继续。paused 节点转 done（`checkpoint TO_HUMAN`）或转 idle（`break_before`），跑下一轮就绪节点。
 
 ### `retry(from_node: str) -> None`
 
@@ -148,6 +149,14 @@ debug 模式：清空 `job_dir` 下持久化产物，下次 run 从头跑。非 
 ### `max_depth` (property)
 
 当前 DAG 最大拓扑深度，`from_depth` 越界校验用。`from_depth` 有效范围 `[0, max_depth]`。
+
+### `has_break_to_agent() -> bool`
+
+启动时检测:`job_dir` 下是否有 `_break_to_agent.json`(未完成的 TO_AGENT 节点)。CLI 用此判断是否要求 `--resume`。
+
+### `pending_break_to_agent() -> list[str]`
+
+返回 `_break_to_agent.json` 里 pending 的 TO_AGENT 节点 id 列表。无文件返回空列表。
 
 ## 执行语义
 

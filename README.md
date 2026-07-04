@@ -17,7 +17,8 @@
 | 同层依次启动 | `serial` 集合同层按 `nodes` 顺序启动,用于 fallback 兜底链 |
 | 接手 / 脱手确认 | `accept` False → skip;`deliver` 失败 → error(契约式设计) |
 | skip 兜底链 | 上游有产物则 skip 当前,无产物则当前接手兜底 |
-| 人机协作 | `checkpoint=AFTER` 暂停 job,等 `c` / `r` / `a` 控制 |
+| 人机协作 | `checkpoint=TO_HUMAN` 暂停 job,等 `c` / `r` / `a` 控制 |
+| Agent 介入 | `checkpoint=TO_AGENT` 跑到节点退出进程,外部 agent 写产物,`--resume` 续跑 |
 | retry 复用上游 | 已完成且无依赖变更的上游 artifact 复用,不重跑 |
 | 定点续跑 | `run --out DIR --from NODE` 复用上游产物,只重跑指定节点及下游 |
 | 按层续跑 | `run --out DIR --from-depth N` 重跑 depth>=N 的所有节点,上游 depth<N 复用 |
@@ -56,11 +57,13 @@ esflow run ./my_flow
 esflow run ./my_flow --out ./runs/a
 esflow run ./my_flow --out ./runs/a --from translate
 esflow run ./my_flow --out ./runs/a --from-depth 2
+esflow run --resume ./runs/a
 esflow debug ./my_flow
 esflow view ./my_flow
 ```
 
-checkpoint 时 stdin 命令:`c` continue / `r` retry / `a` abort。
+`checkpoint=TO_HUMAN` 时 stdin 命令:`c` continue / `r` retry / `a` abort。    
+`checkpoint=TO_AGENT` 时进程退出(exit 2),agent 读 stderr 拿上游产物,写产物文件到 `<out>/<节点>/`,再 `--resume` 续跑,详见 [docs/cli.md](docs/cli.md)。
 
 人工修正某个节点产物后,从它的下一步继续跑:先用 `--out` 固定产物目录,再用 `--from` 指定重跑起点。详见 [docs/artifacts.md](docs/artifacts.md)。
 
@@ -101,6 +104,7 @@ class Fetch(Node):
 | [`examples/fanout_dynamic/`](examples/fanout_dynamic) | `ingest → split → worker(动态) → merge` | `FanOut` 运行时展开副本 |
 | [`examples/student_exam_flow/`](examples/student_exam_flow) | `register → publish_paper → student#3 → review → teacher_leave` | 多 `checkpoint` + `replicas` 综合 |
 | [`examples/ocr_flow/`](examples/ocr_flow) | `ingest → preprocess → ocr → export` | `pass_check` 启动预检 + `output_dir` 落盘 |
+| [`examples/agent_flow/`](examples/agent_flow) | `gen_task → agent_summary → export` | `TO_AGENT` checkpoint:外部 agent 介入写产物 + `--resume` 续跑 |
 
 ## 文档
 
@@ -124,4 +128,3 @@ class Fetch(Node):
 其他：
 
 - [CHANGELOG.md](CHANGELOG.md) — 版本变化与已知限制
-- [docs/how_to_release.md](docs/how_to_release.md) — 发布流程

@@ -1,4 +1,4 @@
-"""publish_paper 节点:老师发布试卷,checkpoint AFTER 等待发卷动作。
+"""publish_paper 节点:老师发布试卷,checkpoint TO_HUMAN 等待发卷动作。
 
 按 r = 发布试卷,学生开始做题。
 """
@@ -9,7 +9,7 @@ from esflow import Node, Checkpoint
 class PublishPaper(Node):
     id = "publish_paper"
     title = "老师发布试卷"
-    checkpoint = Checkpoint.AFTER
+    checkpoint = Checkpoint.TO_HUMAN
 
     def accept(self, ctx) -> bool:
         roster = ctx.get("register")

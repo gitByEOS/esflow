@@ -13,7 +13,7 @@ esflow 按"类"组织的 API 参考。每页一类，写明职责、定义、字
 | [`flow`](FlowDefine.md#flow-装饰器) / [`edge`](FlowDefine.md#edge) / [`FlowDefine`](FlowDefine.md) / [`Edge`](FlowDefine.md#Edge) | `esflow.flow` | 声明 DAG：边、静态副本、动态扇出 base、serial 集合 |
 | [`Node`](Node.md) | `esflow.node` | 节点基类，子类设 `id`/`title`/`checkpoint`，实现 `run`，按需 override `accept`/`deliver` |
 | [`DepthScope`](DepthScope.md) | `esflow.node` | 运行时注入给 `Node.run`/`accept` 的上下文协议：取上游产物、gather 副本、layer 同层 |
-| [`Checkpoint`](Checkpoint.md) | `esflow.node` | 暂停点枚举：`NONE` / `AFTER` |
+| [`Checkpoint`](Checkpoint.md) | `esflow.node` | 暂停点枚举:`NONE` / `TO_HUMAN` / `TO_AGENT` |
 | [`FanOut`](FanOut.md) | `esflow.node` | 动态扇出指令：节点 `run` 返回它，框架展开 N 个副本 |
 | [`Runner`](Runner.md) | `esflow.runner` | 加载并执行 flow，产出事件流，支持并行/扇出/暂停/重试/中止/单调试 |
 | [`JobEvent`](JobEvent.md) | `esflow.event` | 统一事件信封 + 构造函数 + `esflow_event` 打印入口 |

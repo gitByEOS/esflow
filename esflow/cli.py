@@ -1,7 +1,7 @@
 """esflow CLI 调试便捷入口(非核心,主用法是库式 import)。
 
     esflow new my_skill                       # 生成 skill 模板(含可跑 demo flow)
-    esflow run ./my_flow                      # 全跑,checkpoint 时 stdin 等命令
+    esflow run ./my_flow                      # 全跑,checkpoint TO_HUMAN 时 stdin 等命令
     esflow run ./my_flow --out ./runs/a       # 产物写入指定目录,用于后续续跑
     esflow run ./my_flow --out ./runs/a --from translate  # 从指定节点续跑到末端
     esflow run ./my_flow --out ./runs/a --from-depth 2    # 从拓扑深度 2 起续跑到末端
@@ -9,6 +9,11 @@
     esflow debug ./my_flow                    # 调试模式:产物固定到 /tmp/esflow/debug/<flow_id>/,持久化 artifact
     esflow debug ./my_flow --node worker#2    # 单调试复用上游持久化产物,只跑指定节点
     esflow view ./my_flow                     # Web 调试界面(浏览器,SSE 实时推送)
+
+TO_AGENT(agent 介入)链路:
+    esflow run ./agent_flow --out ./runs/a    # 跑到 TO_AGENT 节点退出,返回码 2
+    # agent 读 stderr 拿上游产物,写文件到 ./runs/a/<to_agent 节点>/
+    esflow run ./agent_flow --resume ./runs/a # 框架扫文件构造 artifact + deliver 校验,跑下游
 """
 
 from __future__ import annotations
@@ -20,12 +25,20 @@ import sys
 from pathlib import Path
 
 from .event import esflow_event
+from .node import Checkpoint
 from .runner import Runner
 from .state import JobStatus
 
 
+# CLI 返回码:end=0,error=1,待 agent 介入=2,Ctrl+C=130
+EXIT_END = 0
+EXIT_ERROR = 1
+EXIT_TO_AGENT = 2
+EXIT_INTERRUPTED = 130
+
+
 def _handle_checkpoint_command(runner: Runner, command: str, run_id: str | None) -> None:
-    """处理 checkpoint 短命令:c=继续,r=重试当前,a=中止。"""
+    """处理 checkpoint TO_HUMAN 短命令:c=继续,r=重试当前,a=中止。"""
     cmd = command.strip().lower()
     if not cmd or cmd == "c":
         runner.resume()
@@ -45,33 +58,120 @@ async def _run_cli(
     from_node: str | None = None,
     from_depth: int | None = None,
 ) -> int:
+    """跑 flow,checkpoint TO_HUMAN 走 stdin,checkpoint TO_AGENT 直接退出返回 2。"""
     runner = Runner.load(flow_dir, job_dir=Path(out) if out else None)
     async for event in runner.run(only=only, from_node=from_node, from_depth=from_depth):
         esflow_event(event)
         if event.type == "checkpoint":
+            node = runner.runs.get(event.run_id)
+            if node is not None and node.checkpoint == Checkpoint.TO_AGENT:
+                # TO_AGENT:打印路径 + 上游产物,退出等外部 agent
+                node_dir = runner.job_dir / event.run_id
+                print(f"[to_agent] 写产物到:{node_dir}", file=sys.stderr)
+                print(f"[to_agent] 上游产物:{event.artifact}", file=sys.stderr)
+                print(
+                    f"[to_agent] 完成后续跑:esflow run {flow_dir} --resume {runner.job_dir}",
+                    file=sys.stderr,
+                )
+                return EXIT_TO_AGENT
+            # 普通 TO_HUMAN checkpoint:stdin 等人机命令
             print("(c) continue, (r) retry, (a) abort:", end=" ", flush=True)
             line = sys.stdin.readline().strip()
             _handle_checkpoint_command(runner, line, event.run_id)
         if event.type == "end":
-            return 0 if runner.state.status != JobStatus.ERROR else 1
-    return 0
+            return EXIT_END if runner.state.status != JobStatus.ERROR else EXIT_ERROR
+    return EXIT_END
+
+
+async def _run_resume(job_dir: str) -> int:
+    """--resume:从 _break_to_agent.json 续跑,TO_AGENT 节点扫文件构造 artifact。"""
+    job_path = Path(job_dir)
+    if not job_path.exists():
+        print(f"job 目录不存在:{job_path}", file=sys.stderr)
+        return EXIT_ERROR
+    # job_dir 命名约定:output_root/<flow_id>/<job_id> 或用户 --out 指定
+    # flow_id 是 job_dir 的父目录名,flow_dir 未知 → 用 flow.py 反查不可行
+    # 简化:--resume 要求 job_dir 是 --out 指定的扁平目录,flow_dir 通过
+    # job_dir 同目录的 _flow_dir 指针文件找回(首次跑时记录)
+    flow_dir = _lookup_flow_dir(job_path)
+    if flow_dir is None:
+        print(f"找不到 flow 目录,首次跑请用 esflow run <flow> --out <path>", file=sys.stderr)
+        return EXIT_ERROR
+    runner = Runner.load(flow_dir, job_dir=job_path)
+    if not runner.has_break_to_agent():
+        print(f"无待完成的 TO_AGENT 节点:{job_path}", file=sys.stderr)
+        return EXIT_ERROR
+    async for event in runner.run(resume=True):
+        esflow_event(event)
+        if event.type == "checkpoint":
+            node = runner.runs.get(event.run_id)
+            if node is not None and node.checkpoint == Checkpoint.TO_AGENT:
+                node_dir = runner.job_dir / event.run_id
+                print(f"[to_agent] 仍有未完成节点,写产物到:{node_dir}", file=sys.stderr)
+                print(f"[to_agent] 上游产物:{event.artifact}", file=sys.stderr)
+                print(
+                    f"[to_agent] 完成后续跑:esflow run {flow_dir} --resume {runner.job_dir}",
+                    file=sys.stderr,
+                )
+                return EXIT_TO_AGENT
+        if event.type == "end":
+            return EXIT_END if runner.state.status != JobStatus.ERROR else EXIT_ERROR
+    return EXIT_END
+
+
+def _lookup_flow_dir(job_dir: Path) -> str | None:
+    """从 job_dir 读 _flow_dir.txt 找回 flow 目录绝对路径。"""
+    pointer = job_dir / "_flow_dir.txt"
+    if not pointer.exists():
+        return None
+    try:
+        return pointer.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def _record_flow_dir(job_dir: Path, flow_dir: str) -> None:
+    """首次跑 --out 时记录 flow 目录绝对路径,供 --resume 找回。"""
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "_flow_dir.txt").write_text(flow_dir, encoding="utf-8")
 
 
 def cmd_run(args) -> int:
+    # --resume:从 job_dir 续跑 TO_AGENT 节点,不需要 flow_dir 参数
+    if args.resume:
+        return asyncio.run(_run_resume(args.resume))
+
+    if not args.flow_dir:
+        print("需要 flow_dir 参数,或用 --resume <job_dir> 续跑", file=sys.stderr)
+        return EXIT_ERROR
+
     only = set(args.node) if args.node else None
     from_node = args.from_node or None
     from_depth = args.from_depth if args.from_depth is not None else None
     if from_node and not args.out:
         print("--from 需要同时指定 --out", file=sys.stderr)
-        return 1
+        return EXIT_ERROR
     if from_depth is not None and not args.out:
         print("--from-depth 需要同时指定 --out", file=sys.stderr)
-        return 1
+        return EXIT_ERROR
+
+    # 防误跑:job_dir 下有未完成 TO_AGENT 节点时,要求显式 --resume
+    if args.out:
+        out_path = Path(args.out)
+        if out_path.exists() and (out_path / "_break_to_agent.json").exists():
+            print(
+                f"有未完成的 TO_AGENT 节点,先完成 agent 工作后续跑:\n"
+                f"  esflow run {args.flow_dir} --resume {out_path}",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+        _record_flow_dir(out_path, args.flow_dir)
+
     if from_node:
         pre = Runner.load(args.flow_dir, job_dir=Path(args.out))
         if from_node not in pre.runs:
             print(f"未知节点:{from_node}", file=sys.stderr)
-            return 1
+            return EXIT_ERROR
         missing = pre.missing_upstream({from_node})
         if missing:
             print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
@@ -79,7 +179,7 @@ def cmd_run(args) -> int:
                 f"先全跑落产物:esflow run {args.flow_dir} --out {args.out}",
                 file=sys.stderr,
             )
-            return 1
+            return EXIT_ERROR
     if from_depth is not None:
         pre = Runner.load(args.flow_dir, job_dir=Path(args.out))
         if from_depth < 0 or from_depth > pre.max_depth:
@@ -87,7 +187,7 @@ def cmd_run(args) -> int:
                 f"--from-depth 越界:{from_depth},有效范围 [0, {pre.max_depth}]",
                 file=sys.stderr,
             )
-            return 1
+            return EXIT_ERROR
         target = pre._target_by_depth(from_depth)
         missing = pre.missing_upstream(target)
         if missing:
@@ -96,7 +196,7 @@ def cmd_run(args) -> int:
                 f"先全跑落产物:esflow run {args.flow_dir} --out {args.out}",
                 file=sys.stderr,
             )
-            return 1
+            return EXIT_ERROR
     return asyncio.run(_run_cli(args.flow_dir, only, args.out, from_node, from_depth))
 
 
@@ -322,7 +422,19 @@ def main(argv: list[str] | None = None) -> int:
     p_new.set_defaults(func=cmd_new)
 
     p_run = sub.add_parser("run", help="跑 flow;支持指定产物目录与定点续跑")
-    p_run.add_argument("flow_dir", help="flow 目录路径")
+    p_run.add_argument(
+        "flow_dir",
+        nargs="?",
+        default=None,
+        help="flow 目录路径(--resume 模式可省略)",
+    )
+    p_run.add_argument(
+        "--resume",
+        dest="resume",
+        default=None,
+        metavar="DIR",
+        help="从 job_dir 续跑 TO_AGENT 节点:框架扫产物文件构造 artifact + deliver 校验,跑下游",
+    )
     run_scope = p_run.add_mutually_exclusive_group()
     run_scope.add_argument(
         "--node", "-n",
@@ -378,7 +490,11 @@ def main(argv: list[str] | None = None) -> int:
     p_view.set_defaults(func=cmd_view)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except KeyboardInterrupt:
+        # Ctrl+C 静默退出(view/debug 长跑场景常见),不打印 traceback
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":

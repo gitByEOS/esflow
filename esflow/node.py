@@ -6,7 +6,7 @@
 
     class GenSrt(Node):
         id = "gen_srt"
-        checkpoint = Checkpoint.AFTER
+        checkpoint = Checkpoint.TO_HUMAN
 
         def accept(self, ctx) -> bool:          # 接手确认,可选;返回 False → 跳过本节点
             return Path(ctx.get("fetch")["video"]).exists()
@@ -17,6 +17,19 @@
         def run(self, ctx) -> dict:             # 必须实现
             ...
             return {"srt": srt_path}
+
+TO_AGENT(agent 介入):节点不实现 run,设 checkpoint=Checkpoint.TO_AGENT,
+框架就绪时 emit checkpoint 退出进程,产物由外部 agent 写入 output_dir:
+
+    class AgentSummary(Node):
+        id = "agent_summary"
+        checkpoint = Checkpoint.TO_AGENT
+        def deliver(self, artifact) -> bool:    # 校验 agent 写的产物文件
+            return "summary.txt" in artifact.get("files", [])
+
+agent 链路:esflow run --out <path> → 跑到 TO_AGENT 退出(exit 2)→
+agent 写产物文件到 <path>/<node>/ → esflow run --resume <path> →
+框架扫文件构造 artifact={"output_dir", "files"} + deliver 校验 + 跑下游。
 
 accept 返回 False 不是错误,而是"不接手":框架 emit skipped,artifact 置 None,
 下游可推进,通过 ctx.get 拿到 None 知道上游被跳过。deliver 失败才是错误。
@@ -56,10 +69,17 @@ from typing import Any, Protocol
 
 
 class Checkpoint(str, Enum):
-    """暂停点。run 之后暂停,等外部 resume/retry。"""
+    """暂停点。维度:暂停后交给谁处理。
+
+    NONE:     不暂停
+    TO_HUMAN: run 完成后暂停,展示 artifact 等人机确认(stdin/POST resume/retry/abort)
+    TO_AGENT: 不调 run,就绪即暂停退出进程,产物由外部 agent 写入 output_dir,
+              --resume 时框架扫文件构造 artifact + deliver 校验
+    """
 
     NONE = "none"
-    AFTER = "after"  # run 完成后暂停,展示 artifact 等确认
+    TO_HUMAN = "to_human"
+    TO_AGENT = "to_agent"
 
 
 @dataclass

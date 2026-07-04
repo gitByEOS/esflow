@@ -34,7 +34,7 @@ class Node:
 |---|---|---|---|
 | `id` | `str` | `""` | 节点 base id，loader 校验非空且唯一 |
 | `title` | `str` | `""` | 展示标题，事件 `detail` 回退到 `id` |
-| `checkpoint` | [`Checkpoint`](Checkpoint.md) | `NONE` | 暂停点，`AFTER` 表示 `run` 完成后暂停等确认 |
+| `checkpoint` | [`Checkpoint`](Checkpoint.md) | `NONE` | 暂停点:`TO_HUMAN` 表示 `run` 完成后暂停等人确认;`TO_AGENT` 表示不调 `run`,交给外部 agent 写产物 |
 
 ### 运行时字段（框架注入）
 
@@ -108,7 +108,7 @@ def deliver(self, artifact) -> bool:
 
 - `run` 返回 `FanOut` → 不产 artifact，框架展开 N 个副本并改图（详见 [`FanOut`](FanOut.md)）
 - 同步 `run` 由框架用 `asyncio.to_thread` 包起来并行，节点不需要写 `async`
-- `checkpoint = Checkpoint.AFTER` 的节点 `run` 完成后 emit `checkpoint` 事件，整 job 暂停等 [`Runner.resume()`](Runner.md#resume) / `retry()` / `abort()`
+- `checkpoint = Checkpoint.TO_HUMAN` 的节点 `run` 完成后 emit `checkpoint` 事件，整 job 暂停等 [`Runner.resume()`](Runner.md#resume) / `retry()` / `abort()`；`Checkpoint.TO_AGENT` 不调 `run`，交给外部 agent 写产物（详见 [`Checkpoint`](Checkpoint.md)）
 
 ## 副本与扇出
 

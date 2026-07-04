@@ -110,3 +110,21 @@ esflow run ./video_flow --out ./runs/video-a --from translate
 - `Path` 等对象会被序列化成字符串
 - 动态 FanOut 的运行时图暂不持久化,不承诺从动态副本内部续跑
 - `--from` 需要已有上游 artifact,缺失时 CLI 会提前失败
+
+## TO_AGENT 节点的产物
+
+`checkpoint = Checkpoint.TO_AGENT` 的节点不调 `run`,产物由外部 agent 写入 `output_dir`,框架不写 `artifact.json`(等 `--resume` 时构造)。
+
+agent 契约(零 JSON):
+
+1. `esflow run <flow> --out <path>` 跑到 TO_AGENT 节点,进程退出(exit 2),stderr 打印上游产物 + 产物目录路径
+2. 外部 agent 读 stderr 拿上游产物 → 写产物文件到 `<path>/<to_agent 节点>/`(如 `summary.txt`)
+3. `esflow run --resume <path>` → 框架扫该节点 `output_dir` 下文件(排除 `artifact.json` 和隐藏文件),构造 `artifact = {"output_dir": <str>, "files": [< filenames >]}`,调 `deliver` 校验,通过则落盘 `artifact.json` + 转 DONE + 跑下游
+
+`_break_to_agent.json`:
+
+首次跑到 TO_AGENT 节点时,框架在 `<path>/_break_to_agent.json` 写 `{"pending": ["<节点 id>", ...]}`,记录未完成的 TO_AGENT 节点。`--resume` 完成节点后从 pending 移除,空了删文件。
+
+防误跑:`--out` 目录有 `_break_to_agent.json` 时不带 `--resume` 直接报错退出,避免 agent 未完成就 silently 跑下游。
+
+详见 [ref/Checkpoint.md](ref/Checkpoint.md#用法---to_agentagent-介入)。

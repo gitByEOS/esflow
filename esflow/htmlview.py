@@ -164,7 +164,7 @@ def _svg_dag(runner: Runner) -> str:
             f'<rect x="{x}" y="{y}" width="{node_w}" height="{node_h}" rx="6" '
             f'fill="{color}" stroke="#1f2937" stroke-width="1.5"/>'
             f'<text x="{x + 8}" y="{y + 18}" fill="#fff" font-size="13" font-weight="600">{rid}</text>'
-            f'<text x="{x + 8}" y="{y + 34}" fill="#e5e7eb" font-size="11">{st.status} · {title}</text>'
+            f'<text x="{x + 8}" y="{y + 34}" fill="#e5e7eb" font-size="11">{title}</text>'
             f'</g>'
         )
         # 产物文件名挂在节点矩形下方,SVG file 图标 + 文件名,整组可点击复制完整路径

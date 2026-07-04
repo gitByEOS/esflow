@@ -1,4 +1,4 @@
-"""review 节点:人工复核,run 后暂停等确认(checkpoint AFTER)。"""
+"""review 节点:人工复核,run 后暂停等确认(checkpoint TO_HUMAN)。"""
 
 from esflow import Node, Checkpoint
 
@@ -6,7 +6,7 @@ from esflow import Node, Checkpoint
 class Review(Node):
     id = "review"
     title = "人工复核"
-    checkpoint = Checkpoint.AFTER
+    checkpoint = Checkpoint.TO_HUMAN
 
     def run(self, ctx) -> dict:
         upstream = ctx.get("process")

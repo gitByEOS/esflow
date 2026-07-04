@@ -115,6 +115,11 @@ def load_flow(
     if not flow_py.exists():
         raise FlowLoadError(f"缺少 flow.py:{flow_py}")
 
+    # 把 flow_dir 注入 sys.path,让 flow.py / 节点能 import 同目录兄弟模块(如 common.py)
+    root_str = str(root)
+    if root_str not in sys.path:
+        sys.path.insert(0, root_str)
+
     flow_mod = _load_module(flow_py, "flow")
     flow = _collect_flow_define(flow_mod)
     if flow is None:
