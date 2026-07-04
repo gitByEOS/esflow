@@ -10,7 +10,7 @@ import pytest
 
 import easyflow.runner as runner_mod
 from easyflow import Runner, Checkpoint
-from easyflow.event import WorkflowJobEvent
+from easyflow.event import JobEvent
 from easyflow.loader import load_flow, FlowLoadError
 
 
@@ -24,15 +24,15 @@ def _track_calls(runner: Runner) -> list[str]:
     calls: list[str] = []
 
     def wrap(sd):
-        orig = sd.node.run
+        orig = sd.run
 
         def wrapped(ctx):
-            calls.append(sd.id)
+            calls.append(sd.replica_id)
             return orig(ctx)
 
-        sd.node.run = wrapped
+        sd.run = wrapped
 
-    for sd in runner.steps.values():
+    for sd in runner.runs.values():
         wrap(sd)
     return calls
 
@@ -43,7 +43,7 @@ def _stub_ocr_flow(runner: Runner) -> list[str]:
 
     def wrap(sd):
         def fake(ctx):
-            calls.append(sd.id)
+            calls.append(sd.replica_id)
             if sd.id == "ingest":
                 return {"image_path": "raw.png"}
             if sd.id == "preprocess":
@@ -52,38 +52,24 @@ def _stub_ocr_flow(runner: Runner) -> list[str]:
                 return {"text": f"识别:{ctx.get('preprocess')['image_path']}"}
             if sd.id == "export":
                 text = ctx.get("ocr")["text"]
-                path = sd.node.output_dir / "result.txt"
+                path = sd.output_dir / "result.txt"
                 path.write_text(text + "\n", encoding="utf-8")
                 return {"out_path": str(path), "chars": len(text)}
             return {}
 
-        sd.node.run = fake
+        sd.run = fake
 
-    for sd in runner.steps.values():
+    for sd in runner.runs.values():
         wrap(sd)
     return calls
 
 
-def _collect_events(runner: Runner, only: set[str] | None = None) -> list[WorkflowJobEvent]:
-    """同步跑完 runner(自动 resume checkpoint),返回事件列表。"""
-    events: list[WorkflowJobEvent] = []
+def _collect_events(runner: Runner, **run_kwargs) -> list[JobEvent]:
+    """同步跑 runner(自动 resume checkpoint),返回事件列表。run_kwargs 透传给 runner.run。"""
+    events: list[JobEvent] = []
 
     async def drive():
-        async for ev in runner.run(only=only):
-            events.append(ev)
-            if ev.type == "checkpoint":
-                runner.resume()
-
-    asyncio.run(drive())
-    return events
-
-
-def _collect_events_from(runner: Runner, from_steps: set[str]) -> list[WorkflowJobEvent]:
-    """同步跑 from_steps 续跑流程,返回事件列表。"""
-    events: list[WorkflowJobEvent] = []
-
-    async def drive():
-        async for ev in runner.run(from_steps=from_steps):
+        async for ev in runner.run(**run_kwargs):
             events.append(ev)
             if ev.type == "checkpoint":
                 runner.resume()
@@ -93,10 +79,10 @@ def _collect_events_from(runner: Runner, from_steps: set[str]) -> list[WorkflowJ
 
 
 def test_load_quickstart_flow():
-    flow, steps, _ = load_flow(str(EXAMPLE))
+    flow, runs, _ = load_flow(str(EXAMPLE))
     assert flow.id == "quickstart_flow"
-    assert set(steps.keys()) == {"fetch", "process", "review", "export"}
-    assert steps["review"].checkpoint == Checkpoint.AFTER
+    assert set(runs.keys()) == {"fetch", "process", "review", "export"}
+    assert runs["review"].checkpoint == Checkpoint.AFTER
 
 
 def test_run_full_flow_with_auto_resume():
@@ -109,7 +95,7 @@ def test_run_full_flow_with_auto_resume():
     assert types[-1] == "end"
     assert "checkpoint" in types
     assert calls == ["fetch", "process", "review", "export"]
-    assert all(s.status == "done" for s in runner.state.steps.values())
+    assert all(s.status == "done" for s in runner.state.runs.values())
     assert runner.artifacts["export"]["exported"] is True
 
 
@@ -133,7 +119,7 @@ def test_run_from_reuses_out_dir_upstream_artifacts(tmp_path: Path):
 
     second = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
     second_calls = _stub_ocr_flow(second)
-    events = _collect_events_from(second, {"ocr"})
+    events = _collect_events(second, from_node="ocr")
 
     assert events[-1].type == "end"
     assert second_calls == ["ocr", "export"]
@@ -147,11 +133,70 @@ def test_run_from_reuses_out_dir_upstream_artifacts(tmp_path: Path):
     assert export_artifact["chars"] == len("识别:fixed.png")
 
 
+def test_run_from_depth_reuses_upstream_layers(tmp_path: Path):
+    """from_depth=2 重跑 depth>=2(ocr+export),上游 ingest+preprocess 复用不重跑。"""
+    out_dir = tmp_path / "ocr_run"
+
+    first = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
+    first_calls = _stub_ocr_flow(first)
+    _collect_events(first)
+    assert first_calls == ["ingest", "preprocess", "ocr", "export"]
+
+    # 人工篡改 preprocess 产物,from_depth=2 不应感知(上游复用,不重跑)
+    fixed_preprocess = {"image_path": "fixed.png"}
+    (out_dir / "preprocess" / ARTIFACT_FILE).write_text(
+        json.dumps(fixed_preprocess, ensure_ascii=False), encoding="utf-8"
+    )
+
+    second = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
+    second_calls = _stub_ocr_flow(second)
+    events = _collect_events(second, from_depth=2)
+
+    assert events[-1].type == "end"
+    assert second_calls == ["ocr", "export"]
+    assert second.artifacts["preprocess"] == fixed_preprocess
+    assert second.artifacts["ocr"]["text"] == "识别:fixed.png"
+
+
+def test_run_from_depth_zero_reruns_all(tmp_path: Path):
+    """from_depth=0 重跑全部节点(target=所有,加载后全清)。"""
+    out_dir = tmp_path / "ocr_run"
+    first = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
+    _stub_ocr_flow(first)
+    _collect_events(first)
+
+    second = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
+    second_calls = _stub_ocr_flow(second)
+    _collect_events(second, from_depth=0)
+    assert second_calls == ["ingest", "preprocess", "ocr", "export"]
+
+
+def test_run_from_depth_out_of_range_raises(tmp_path: Path):
+    """from_depth 越界(>max_depth 或 <0)在 run() 迭代前抛 RuntimeError。"""
+    out_dir = tmp_path / "ocr_run"
+    runner = Runner.load(str(OCR_EXAMPLE), job_dir=out_dir)
+    assert runner.max_depth == 3
+
+    async def drive_bad():
+        async for _ in runner.run(from_depth=4):
+            pass
+
+    with pytest.raises(RuntimeError, match="from_depth 越界"):
+        asyncio.run(drive_bad())
+
+    async def drive_neg():
+        async for _ in runner.run(from_depth=-1):
+            pass
+
+    with pytest.raises(RuntimeError, match="from_depth 越界"):
+        asyncio.run(drive_neg())
+
+
 def test_retry_reuses_upstream_artifacts():
     """retry review 后 fetch/process 不重跑,review/export 跑 2 次。"""
     runner = Runner.load(str(EXAMPLE))
     calls = _track_calls(runner)
-    events: list[WorkflowJobEvent] = []
+    events: list[JobEvent] = []
 
     async def drive():
         first_checkpoint = True
@@ -174,7 +219,7 @@ def test_retry_reuses_upstream_artifacts():
 
 def test_abort_at_checkpoint():
     runner = Runner.load(str(EXAMPLE))
-    events: list[WorkflowJobEvent] = []
+    events: list[JobEvent] = []
 
     async def drive():
         async for ev in runner.run():
@@ -189,7 +234,7 @@ def test_abort_at_checkpoint():
     assert runner.state.status == "error"
 
 
-def test_step_error_propagates(tmp_path: Path):
+def test_node_error_propagates(tmp_path: Path):
     flow_dir = tmp_path / "bad"
     (flow_dir / "nodes").mkdir(parents=True)
     (flow_dir / "flow.py").write_text(

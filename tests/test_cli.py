@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 import easyflow.runner as runner_mod
 from easyflow.cli import _handle_checkpoint_command, cmd_debug, cmd_new, main
 from easyflow.runner import Runner
@@ -28,8 +30,8 @@ class _CheckpointRunner:
     def resume(self) -> None:
         self.calls.append(("resume", None))
 
-    def retry(self, step_id: str) -> None:
-        self.calls.append(("retry", step_id))
+    def retry(self, run_id: str) -> None:
+        self.calls.append(("retry", run_id))
 
     def abort(self) -> None:
         self.calls.append(("abort", None))
@@ -143,3 +145,27 @@ def test_run_from_refuses_when_upstream_missing(tmp_path: Path, capsys) -> None:
     err = capsys.readouterr().err
     assert "上游产物缺失" in err
     assert "easyflow run" in err
+
+
+def test_run_from_depth_requires_out(capsys) -> None:
+    """run --from-depth 必须指定 --out,否则无法复用上游产物。"""
+    rc = main(["run", str(OCR_EXAMPLE), "--from-depth", "2"])
+
+    assert rc == 1
+    assert "--from-depth 需要同时指定 --out" in capsys.readouterr().err
+
+
+def test_run_from_depth_out_of_range(tmp_path: Path, capsys) -> None:
+    """run --from-depth 越界提前失败,不启动节点执行。"""
+    rc = main(["run", str(OCR_EXAMPLE), "--out", str(tmp_path / "out"), "--from-depth", "99"])
+
+    assert rc == 1
+    assert "--from-depth 越界" in capsys.readouterr().err
+
+
+def test_run_from_and_from_depth_mutually_exclusive(tmp_path: Path) -> None:
+    """--from 与 --from-depth 互斥,argparse 退出码 2。"""
+    with pytest.raises(SystemExit) as exc:
+        main(["run", str(OCR_EXAMPLE), "--out", str(tmp_path / "out"),
+              "--from", "ocr", "--from-depth", "2"])
+    assert exc.value.code == 2

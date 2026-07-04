@@ -6,14 +6,14 @@ import asyncio
 from pathlib import Path
 
 from easyflow import Runner
-from easyflow.event import WorkflowJobEvent
+from easyflow.event import JobEvent
 
 
 SKIP = Path(__file__).resolve().parent.parent / "examples" / "skip_flow"
 
 
-def _events(runner: Runner) -> list[WorkflowJobEvent]:
-    out: list[WorkflowJobEvent] = []
+def _events(runner: Runner) -> list[JobEvent]:
+    out: list[JobEvent] = []
 
     async def drive():
         async for ev in runner.run():
@@ -31,31 +31,31 @@ def test_skip_flow_fallback_skipped_when_first_source_succeeds():
 
     # fetch_from_wechat / fetch_from_bili 有 skipped,fetch_from_ssr 没有
     assert any(
-        e.type == "trace" and e.status == "skipped" and e.step_id == "fetch_from_wechat"
+        e.type == "trace" and e.status == "skipped" and e.run_id == "fetch_from_wechat"
         for e in events
     )
     assert any(
-        e.type == "trace" and e.status == "skipped" and e.step_id == "fetch_from_bili"
+        e.type == "trace" and e.status == "skipped" and e.run_id == "fetch_from_bili"
         for e in events
     )
     assert not any(
-        e.type == "trace" and e.status == "skipped" and e.step_id == "fetch_from_ssr"
+        e.type == "trace" and e.status == "skipped" and e.run_id == "fetch_from_ssr"
         for e in events
     )
     # parse_to_md skip,parse_to_html 不 skip
     assert any(
-        e.type == "trace" and e.status == "skipped" and e.step_id == "parse_to_md"
+        e.type == "trace" and e.status == "skipped" and e.run_id == "parse_to_md"
         for e in events
     )
 
     # 状态:fetch_from_wechat/bili skipped,其余 done
-    assert runner.state.steps["fetch_from_ssr"].status == "done"
-    assert runner.state.steps["fetch_from_wechat"].status == "skipped"
-    assert runner.state.steps["fetch_from_bili"].status == "skipped"
-    assert runner.state.steps["merge"].status == "done"
-    assert runner.state.steps["parse_to_html"].status == "done"
-    assert runner.state.steps["parse_to_md"].status == "skipped"
-    assert runner.state.steps["done"].status == "done"
+    assert runner.state.runs["fetch_from_ssr"].status == "done"
+    assert runner.state.runs["fetch_from_wechat"].status == "skipped"
+    assert runner.state.runs["fetch_from_bili"].status == "skipped"
+    assert runner.state.runs["merge"].status == "done"
+    assert runner.state.runs["parse_to_html"].status == "done"
+    assert runner.state.runs["parse_to_md"].status == "skipped"
+    assert runner.state.runs["done"].status == "done"
 
     # skip 节点 artifact 占位 None,fetch_from_ssr 有产物文件路径
     assert runner.artifacts["fetch_from_wechat"] is None
@@ -129,10 +129,10 @@ def test_skip_flow_worker_b_fallback_when_a_empty(tmp_path: Path):
 
     # worker_b 接手兜底,未 skip
     assert not any(
-        e.type == "trace" and e.status == "skipped" and e.step_id == "worker_b"
+        e.type == "trace" and e.status == "skipped" and e.run_id == "worker_b"
         for e in events
     )
-    assert runner.state.steps["worker_b"].status == "done"
+    assert runner.state.runs["worker_b"].status == "done"
     assert runner.artifacts["worker_b"]["result"] == "B兜底产物"
     # merge 汇总两路,worker_a 产物有(result=None 但 dict 非空),winner 取 B
     assert runner.artifacts["merge"]["winner"] == "B兜底产物"
@@ -145,12 +145,12 @@ def test_serial_starts_one_at_a_time():
     events = _events(runner)
     # fetch_from_ssr 的 final 早于 fetch_from_wechat 的 queued(serial 保证依次启动)
     a_final = next(
-        i for i, e in enumerate(events) if e.type == "final" and e.step_id == "fetch_from_ssr"
+        i for i, e in enumerate(events) if e.type == "final" and e.run_id == "fetch_from_ssr"
     )
     b_q = next(
         i
         for i, e in enumerate(events)
-        if e.type == "trace" and e.step_id == "fetch_from_wechat" and e.status == "queued"
+        if e.type == "trace" and e.run_id == "fetch_from_wechat" and e.status == "queued"
     )
     assert a_final < b_q
 
@@ -163,8 +163,8 @@ def test_parallel_not_broken_without_serial():
     events = _events(runner)
     # 5 个 worker 都进入 queued(顺序不限,因为并行),都在 merge queued 之前
     worker_queued = {
-        e.step_id
+        e.run_id
         for e in events
-        if e.type == "trace" and e.status == "queued" and e.step_id.startswith("worker#")
+        if e.type == "trace" and e.status == "queued" and e.run_id.startswith("worker#")
     }
     assert len(worker_queued) == 5

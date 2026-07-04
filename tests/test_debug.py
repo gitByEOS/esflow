@@ -1,7 +1,7 @@
 """debug 模式测试:产物固定目录、artifact 持久化、复用上游、retry 清磁盘。
 
 debug 与 run 的核心区别:
-- 产物落 /tmp/easyflow/debug/<flow_id>/<step_id>/,无 job_id,反复跑累积
+- 产物落 /tmp/easyflow/debug/<flow_id>/<run_id>/,无 job_id,反复跑累积
 - 节点 done/skipped 后写 artifact.json,启动时加载,已完成节点跳过不重跑
 - retry 清下游磁盘 artifact.json,防止下次启动加载到旧产物
 """
@@ -14,15 +14,15 @@ from pathlib import Path
 
 import easyflow.runner as runner_mod
 from easyflow import Runner
-from easyflow.event import WorkflowJobEvent
+from easyflow.event import JobEvent
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
 ARTIFACT_FILE = runner_mod._ARTIFACT_FILE
 
 
-def _drive(runner: Runner, only: set[str] | None = None) -> list[WorkflowJobEvent]:
+def _drive(runner: Runner, only: set[str] | None = None) -> list[JobEvent]:
     """跑 runner,checkpoint 自动 resume,返回事件列表。"""
-    events: list[WorkflowJobEvent] = []
+    events: list[JobEvent] = []
 
     async def go():
         async for ev in runner.run(only=only):
@@ -39,15 +39,15 @@ def _track_runs(runner: Runner) -> list[str]:
     calls: list[str] = []
 
     def wrap(sd):
-        orig = sd.node.run
+        orig = sd.run
 
         def wrapped(ctx):
-            calls.append(sd.id)
+            calls.append(sd.replica_id)
             return orig(ctx)
 
-        sd.node.run = wrapped
+        sd.run = wrapped
 
-    for sd in runner.steps.values():
+    for sd in runner.runs.values():
         wrap(sd)
     return calls
 
@@ -66,9 +66,9 @@ def test_debug_persists_artifacts(monkeypatch, tmp_path: Path):
     _drive(runner)
 
     assert runner.debug is True
-    for sid in ("fetch", "process", "review", "export"):
-        art_file = runner.job_dir / sid / ARTIFACT_FILE
-        assert art_file.exists(), f"{sid} 缺 artifact.json"
+    for rid in ("fetch", "process", "review", "export"):
+        art_file = runner.job_dir / rid / ARTIFACT_FILE
+        assert art_file.exists(), f"{rid} 缺 artifact.json"
         json.loads(art_file.read_text(encoding="utf-8"))
 
 
@@ -111,7 +111,7 @@ def test_debug_retry_clears_downstream_artifact(monkeypatch, tmp_path: Path):
     runner = Runner.load(str(EXAMPLE), debug=True)
     calls = _track_runs(runner)
 
-    events: list[WorkflowJobEvent] = []
+    events: list[JobEvent] = []
 
     async def go():
         first_cp = True
@@ -217,8 +217,8 @@ def test_clear_debug_noop_for_run_mode(tmp_path: Path):
     assert job_dir.parent.exists() or True  # outputs 根目录未被破坏
 
 
-def test_scope_only_runs_target_without_upstream(monkeypatch, tmp_path: Path):
-    """scope={X} 只跑 X,上游从磁盘加载,不重跑上游。"""
+def test_nodes_only_runs_target_without_upstream(monkeypatch, tmp_path: Path):
+    """nodes={X} 只跑 X,上游从磁盘加载,不重跑上游。"""
     _debug_root(monkeypatch, tmp_path)
 
     # 先全跑落产物
@@ -226,13 +226,13 @@ def test_scope_only_runs_target_without_upstream(monkeypatch, tmp_path: Path):
     _drive(base)
     assert base.state.status == "done"
 
-    # scope=review:上游 fetch/process 从磁盘复用,只跑 review
+    # nodes=review:上游 fetch/process 从磁盘复用,只跑 review
     runner = Runner.load(str(EXAMPLE), debug=True)
     calls = _track_runs(runner)
     events = []
 
     async def go():
-        async for ev in runner.run(scope={"review"}):
+        async for ev in runner.run(nodes={"review"}):
             events.append(ev)
             if ev.type == "checkpoint":
                 runner.resume()
@@ -253,12 +253,12 @@ def test_break_before_pauses_before_target(monkeypatch, tmp_path: Path):
 
     runner = Runner.load(str(EXAMPLE), debug=True)
     calls = _track_runs(runner)
-    events: list[WorkflowJobEvent] = []
+    events: list[JobEvent] = []
     cp_count = 0
 
     async def go():
         nonlocal cp_count
-        async for ev in runner.run(scope={"export"}, break_before={"export"}):
+        async for ev in runner.run(nodes={"export"}, break_before={"export"}):
             events.append(ev)
             if ev.type == "checkpoint":
                 cp_count += 1
@@ -270,18 +270,18 @@ def test_break_before_pauses_before_target(monkeypatch, tmp_path: Path):
     assert cp_count == 1
     assert calls == ["export"]
     assert runner.state.status == "done"
-    assert runner.state.steps["export"].status == "done"
+    assert runner.state.runs["export"].status == "done"
 
 
-def test_scope_target_not_ready_when_upstream_missing(monkeypatch, tmp_path: Path):
-    """scope={X} 上游磁盘无产物时 X 不就绪,job 直接 end,不跑任何节点。"""
+def test_nodes_target_not_ready_when_upstream_missing(monkeypatch, tmp_path: Path):
+    """nodes={X} 上游磁盘无产物时 X 不就绪,job 直接 end,不跑任何节点。"""
     _debug_root(monkeypatch, tmp_path)
 
     runner = Runner.load(str(EXAMPLE), debug=True)
     calls = _track_runs(runner)
 
     async def go():
-        async for _ in runner.run(scope={"review"}):
+        async for _ in runner.run(nodes={"review"}):
             pass
 
     asyncio.run(go())
@@ -292,7 +292,7 @@ def test_scope_target_not_ready_when_upstream_missing(monkeypatch, tmp_path: Pat
 
 
 def test_missing_upstream_detects_lack(monkeypatch, tmp_path: Path):
-    """debug 目录无产物时,missing_upstream 返回 scope 节点的全部上游。"""
+    """debug 目录无产物时,missing_upstream 返回 nodes 节点的全部上游。"""
     _debug_root(monkeypatch, tmp_path)
     runner = Runner.load(str(EXAMPLE), debug=True)
     # 没跑过,磁盘空

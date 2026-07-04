@@ -39,15 +39,15 @@ runner = Runner.load("./my_flow", debug=True)
 async for event in runner.run():
     ...
 
-# 单点调试:scope 限定只跑 X(上游从磁盘复用),break_before 在 X 前暂停
-async for event in runner.run(scope={"worker#2"}, break_before={"worker#2"}):
+# 单点调试:nodes 限定只跑 X(上游从磁盘复用),break_before 在 X 前暂停
+async for event in runner.run(nodes={"worker#2"}, break_before={"worker#2"}):
     if event.type == "checkpoint":
         runner.resume()  # 跑 X
 ```
 
-`scope` 与 `only` 是内部 API 区分:
+`nodes` 与 `only` 是内部 API 区分:
 - `only={"X"}` 跑 X 及上游
-- `scope={"X"}` 只跑 X,上游必须已完成
+- `nodes={"X"}` 只跑 X,上游必须已完成
 
 ## 清空 debug 目录
 

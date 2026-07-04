@@ -21,9 +21,9 @@ import textwrap
 import webbrowser
 from typing import Any
 
-from .event import WorkflowJobEvent
+from .event import JobEvent
 from .runner import Runner
-from .state import StepState
+from .state import RunState
 
 _STATUS_COLOR = {
     "idle": "#8b949e",
@@ -71,31 +71,31 @@ def _layered_layout(
 
 
 def _dag_node_ids(runner: Runner) -> list[str]:
-    """渲染用节点集:steps + edges 端点(未扩图的 dynamic 模板节点补为 idle)。"""
-    node_ids = list(runner.steps.keys())
+    """渲染用节点集:runs + edges 端点(未扩图的 dynamic 模板节点补为 idle)。"""
+    node_ids = list(runner.runs.keys())
     seen = set(node_ids)
     for e in runner.flow.edges:
-        for sid in (e.from_, e.to):
-            if sid not in seen:
-                node_ids.append(sid)
-                seen.add(sid)
+        for rid in (e.from_, e.to):
+            if rid not in seen:
+                node_ids.append(rid)
+                seen.add(rid)
     return node_ids
 
 
-def _template_title(runner: Runner, sid: str) -> str:
+def _template_title(runner: Runner, rid: str) -> str:
     """未扩图的 dynamic 模板节点:从 node_classes 取 title。"""
-    cls = runner.node_classes.get(sid)
-    return getattr(cls, "title", None) or getattr(cls, "id", sid) or sid
+    cls = runner.node_classes.get(rid)
+    return getattr(cls, "title", None) or getattr(cls, "id", rid) or rid
 
 
-def _artifact_files(runner: Runner, sid: str) -> list[tuple[str, str]]:
+def _artifact_files(runner: Runner, rid: str) -> list[tuple[str, str]]:
     """从节点 artifact dict 里提取产物 (文件名, 完整路径),值是 output_dir 下的路径。"""
-    if sid not in runner.steps:
+    if rid not in runner.runs:
         return []
-    st = runner.state.steps.get(sid)
+    st = runner.state.runs.get(rid)
     if not st or not isinstance(st.artifact, dict):
         return []
-    output_dir = str(runner.steps[sid].node.output_dir)
+    output_dir = str(runner.runs[rid].output_dir)
     return [
         (v.rsplit("/", 1)[-1], v)
         for v in st.artifact.values()
@@ -115,8 +115,8 @@ def _svg_dag(runner: Runner) -> str:
     width = pad * 2 + (max_col + 1) * (node_w + gap_x)
     height = pad * 2 + (max_row + 1) * (node_h + gap_y)
 
-    def xy(sid: str) -> tuple[int, int]:
-        c, r = pos[sid]
+    def xy(rid: str) -> tuple[int, int]:
+        c, r = pos[rid]
         return pad + c * (node_w + gap_x), pad + r * (node_h + gap_y)
 
     parts = [f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">']
@@ -148,27 +148,27 @@ def _svg_dag(runner: Runner) -> str:
             f'fill="#4b5563"/>'
         )
     # 再画节点
-    for sid in node_ids:
-        if sid in runner.steps:
-            st: StepState = runner.state.steps.get(sid, StepState(step_id=sid))
+    for rid in node_ids:
+        if rid in runner.runs:
+            st: RunState = runner.state.runs.get(rid, RunState(run_id=rid))
             color = _STATUS_COLOR.get(st.status, "#ffffff")
-            title = runner.steps[sid].title
+            title = runner.runs[rid].title or runner.runs[rid].id
         else:
             # 未扩图的 dynamic 模板节点:渲染为 idle
-            st = StepState(step_id=sid)
+            st = RunState(run_id=rid)
             color = _STATUS_COLOR["idle"]
-            title = _template_title(runner, sid)
-        x, y = xy(sid)
+            title = _template_title(runner, rid)
+        x, y = xy(rid)
         parts.append(
-            f'<g class="node" data-id="{sid}">'
+            f'<g class="node" data-id="{rid}">'
             f'<rect x="{x}" y="{y}" width="{node_w}" height="{node_h}" rx="6" '
             f'fill="{color}" stroke="#1f2937" stroke-width="1.5"/>'
-            f'<text x="{x + 8}" y="{y + 18}" fill="#fff" font-size="13" font-weight="600">{sid}</text>'
+            f'<text x="{x + 8}" y="{y + 18}" fill="#fff" font-size="13" font-weight="600">{rid}</text>'
             f'<text x="{x + 8}" y="{y + 34}" fill="#e5e7eb" font-size="11">{st.status} · {title}</text>'
             f'</g>'
         )
         # 产物文件名挂在节点矩形下方,SVG file 图标 + 文件名,整组可点击复制完整路径
-        files = _artifact_files(runner, sid)
+        files = _artifact_files(runner, rid)
         fx = x + 4
         icon_y = y + node_h + 4
         for fname, fpath in files:
@@ -413,7 +413,7 @@ dag.addEventListener('wheel', (e) => {
 }, {passive: false});
 document.getElementById('start').onclick  = () => post({action: 'start'});
 document.getElementById('resume').onclick = () => post({action: 'resume'});
-document.getElementById('retry').onclick  = () => post({action: 'retry', from_step: paused});
+document.getElementById('retry').onclick  = () => post({action: 'retry', from_node: paused});
 document.getElementById('abort').onclick  = () => post({action: 'abort'});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'r') document.getElementById('resume').click();
@@ -440,36 +440,36 @@ def _artifact_summary(artifact: Any) -> str:
 
 
 def _state_snapshot(
-    runner: Runner, events: list[WorkflowJobEvent], started: bool = False
+    runner: Runner, events: list[JobEvent], started: bool = False
 ) -> dict[str, Any]:
     """构造推给前端的 state 快照。"""
     nodes = []
-    for sid in _dag_node_ids(runner):
-        if sid in runner.steps:
-            st = runner.state.steps.get(sid, StepState(step_id=sid))
-            status, title = st.status, runner.steps[sid].title
+    for rid in _dag_node_ids(runner):
+        if rid in runner.runs:
+            st = runner.state.runs.get(rid, RunState(run_id=rid))
+            status, title = st.status, (runner.runs[rid].title or runner.runs[rid].id)
         else:
-            status, title = "idle", _template_title(runner, sid)
+            status, title = "idle", _template_title(runner, rid)
         nodes.append(
             {
-                "id": sid,
+                "id": rid,
                 "status": status,
                 "color": _STATUS_COLOR.get(status, "#fff"),
                 "title": title,
-                "files": [f[0] for f in _artifact_files(runner, sid)],
-                "file_paths": dict(_artifact_files(runner, sid)),
+                "files": [f[0] for f in _artifact_files(runner, rid)],
+                "file_paths": dict(_artifact_files(runner, rid)),
             }
         )
     paused = next(
-        (sid for sid, s in runner.state.steps.items() if s.status == "paused"),
+        (rid for rid, s in runner.state.runs.items() if s.status == "paused"),
         None,
     )
     log_lines = []
     for ev in events[-200:]:
         cls = ""
         text = ev.type
-        if ev.step_id:
-            text += f" [{ev.step_id}]"
+        if ev.run_id:
+            text += f" [{ev.run_id}]"
         if ev.status:
             text += f" {ev.status}"
         if ev.detail:
@@ -493,8 +493,8 @@ def _state_snapshot(
         "nodes": nodes,
         "dag": _svg_dag(runner),
         "artifacts": {
-            sid: s.artifact
-            for sid, s in runner.state.steps.items()
+            rid: s.artifact
+            for rid, s in runner.state.runs.items()
             if s.artifact is not None
         },
         "paused": paused,
@@ -558,7 +558,7 @@ async def run_html_view(
                 file=sys.stderr,
             )
             return 1
-    events: list[WorkflowJobEvent] = []
+    events: list[JobEvent] = []
     sse_queues: list[asyncio.Queue] = []
     finished = {"v": False}
     started = {"v": bool(only)}
@@ -570,7 +570,7 @@ async def run_html_view(
         # 非 only 模式:等用户点 start
         if not only:
             await start_event.wait()
-        async for ev in runner.run(scope=only, break_before=break_before):
+        async for ev in runner.run(nodes=only, break_before=break_before):
             events.append(ev)
             for q in sse_queues:
                 await q.put(1)
@@ -623,7 +623,7 @@ async def run_html_view(
             elif action == "resume":
                 runner.resume()
             elif action == "retry":
-                runner.retry(payload.get("from_step") or "")
+                runner.retry(payload.get("from_node") or "")
             elif action == "abort":
                 runner.abort()
             # 每次控制后推一次快照

@@ -2,7 +2,7 @@
 
 主用法(库式):
 
-    from easyflow import Runner, Node, StepContext, Checkpoint
+    from easyflow import Runner, Node, DepthScope, Checkpoint
 
     runner = Runner.load("./my_flow")
     async for event in runner.run():
@@ -19,7 +19,7 @@
 """
 
 from .event import (
-    WorkflowJobEvent,
+    JobEvent,
     trace,
     delta,
     checkpoint,
@@ -28,14 +28,14 @@ from .event import (
     end,
     easyflow_event,
 )
-from .step import Node, StepContext, Checkpoint, StepDefine, FanOut
+from .node import Node, DepthScope, Checkpoint, FanOut
 from .flow import flow, edge, Edge, FlowDefine
-from .state import JobState, StepState, apply_event
+from .state import JobState, RunState, NodeStatus, apply_event
 from .loader import load_flow, FlowLoadError
 from .runner import Runner
 
 __all__ = [
-    "WorkflowJobEvent",
+    "JobEvent",
     "trace",
     "delta",
     "checkpoint",
@@ -44,16 +44,16 @@ __all__ = [
     "end",
     "easyflow_event",
     "Node",
-    "StepContext",
+    "DepthScope",
     "Checkpoint",
-    "StepDefine",
     "FanOut",
     "flow",
     "edge",
     "Edge",
     "FlowDefine",
     "JobState",
-    "StepState",
+    "RunState",
+    "NodeStatus",
     "apply_event",
     "load_flow",
     "FlowLoadError",

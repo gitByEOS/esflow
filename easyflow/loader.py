@@ -9,14 +9,14 @@
         worker.py    # 定义 Node 子类(静态 replicas 或 dynamic 由 FanOut 展开)
         ...
 
-load_flow(dir) 返回 (展开后的 FlowDefine, {node_id: StepDefine}, {base_id: Node子类}),校验:
+load_flow(dir) 返回 (展开后的 FlowDefine, {run_id: Node 实例}, {base_id: Node子类}),校验:
 - flow.py 里有且仅有一个 @flow
 - nodes/*.py 每个有且仅有一个 Node 子类(id 非空)
 - flow.nodes 的每个 base id 都能在 nodes 里找到对应 Node 子类
 - replicas / dynamic 的 base 必须在 nodes 里,且二者不相交
 - 静态副本展开后的 DAG(动态 base 以 base id 参与)无环
 
-静态副本:replicas = {"worker": 5} → worker#0..worker#4 五个 StepDefine。
+静态副本:replicas = {"worker": 5} → worker#0..worker#4 五个 Node 实例。
 动态扇出:dynamic = {"worker"} → loader 不实例化,运行时由某节点 run 返回
 FanOut(base="worker", payload=[...]) 创建副本,runner 动态扩图。
 node_classes 全量返回,供 runner 实例化动态副本。
@@ -29,7 +29,7 @@ import sys
 from pathlib import Path
 
 from .flow import Edge, FlowDefine
-from .step import Node, StepDefine, _instantiate
+from .node import Node, _instantiate
 
 
 class FlowLoadError(Exception):
@@ -79,14 +79,14 @@ def _expand_ids(base: str, replicas: dict[str, int]) -> list[str]:
 
 def _check_acyclic(nodes: set[str], edges: list[Edge]) -> None:
     """Kahn 拓扑校验 DAG 无环。"""
-    adj: dict[str, list[str]] = {sid: [] for sid in nodes}
-    indeg: dict[str, int] = {sid: 0 for sid in nodes}
+    adj: dict[str, list[str]] = {rid: [] for rid in nodes}
+    indeg: dict[str, int] = {rid: 0 for rid in nodes}
     for e in edges:
         if e.from_ not in nodes or e.to not in nodes:
             raise FlowLoadError(f"边引用了未知节点:{e.from_} -> {e.to}")
         adj[e.from_].append(e.to)
         indeg[e.to] += 1
-    queue = [sid for sid, d in indeg.items() if d == 0]
+    queue = [rid for rid, d in indeg.items() if d == 0]
     seen = 0
     while queue:
         n = queue.pop()
@@ -101,10 +101,10 @@ def _check_acyclic(nodes: set[str], edges: list[Edge]) -> None:
 
 def load_flow(
     flow_dir: str | Path,
-) -> tuple[FlowDefine, dict[str, StepDefine], dict[str, type[Node]]]:
-    """加载一个 flow 目录,展开静态副本,返回 (FlowDefine, steps, node_classes)。
+) -> tuple[FlowDefine, dict[str, Node], dict[str, type[Node]]]:
+    """加载一个 flow 目录,展开静态副本,返回 (FlowDefine, runs, node_classes)。
 
-    steps 不含 dynamic base(运行时由 runner 实例化)。
+    runs 是 {run_id: Node 实例},不含 dynamic base(运行时由 runner 实例化)。
     node_classes 全量 {base_id: Node子类},供 runner 创建动态副本。
     """
     root = Path(flow_dir)
@@ -159,8 +159,8 @@ def load_flow(
     if overlap:
         raise FlowLoadError(f"base 不能同时声明 replicas 和 dynamic:{overlap}")
 
-    # 展开静态副本 + 收集 steps;动态 base 不实例化(保留 base id 参与无环校验)
-    steps: dict[str, StepDefine] = {}
+    # 展开静态副本 + 收集 runs;动态 base 不实例化(保留 base id 参与无环校验)
+    runs: dict[str, Node] = {}
     expanded_nodes: list[str] = []
     for base in flow.nodes:
         if base in flow.dynamic:
@@ -168,7 +168,7 @@ def load_flow(
             continue
         for rid in _expand_ids(base, flow.replicas):
             idx = int(rid.rsplit("#", 1)[1]) if "#" in rid else 0
-            steps[rid] = _instantiate(node_classes[base], rid, idx)
+            runs[rid] = _instantiate(node_classes[base], rid, idx)
             expanded_nodes.append(rid)
 
     # 展开边:静态副本 base 扇出/扇入,动态 base 保留 base id(运行时 runner 扩展)
@@ -196,4 +196,4 @@ def load_flow(
 
     # 无环校验:动态 base 以 base id 参与(运行时才展开成副本)
     _check_acyclic(set(expanded_nodes), expanded_edges)
-    return expanded_flow, steps, node_classes
+    return expanded_flow, runs, node_classes

@@ -8,15 +8,15 @@ from pathlib import Path
 import pytest
 
 from easyflow import Runner
-from easyflow.event import WorkflowJobEvent
+from easyflow.event import JobEvent
 from easyflow.loader import load_flow, FlowLoadError
 
 
 FANOUT = Path(__file__).resolve().parent.parent / "examples" / "fanout_flow"
 
 
-def _events(runner: Runner, only: set[str] | None = None) -> list[WorkflowJobEvent]:
-    out: list[WorkflowJobEvent] = []
+def _events(runner: Runner, only: set[str] | None = None) -> list[JobEvent]:
+    out: list[JobEvent] = []
 
     async def drive():
         async for ev in runner.run(only=only):
@@ -27,12 +27,12 @@ def _events(runner: Runner, only: set[str] | None = None) -> list[WorkflowJobEve
 
 
 def test_load_fanout_expands_replicas():
-    flow, steps, _ = load_flow(str(FANOUT))
+    flow, runs, _ = load_flow(str(FANOUT))
     assert flow.id == "fanout_flow"
     # worker 展开成 5 个副本
-    worker_ids = {sid for sid in steps if sid.startswith("worker#")}
+    worker_ids = {rid for rid in runs if rid.startswith("worker#")}
     assert worker_ids == {f"worker#{i}" for i in range(5)}
-    assert "fetch" in steps and "merge" in steps
+    assert "fetch" in runs and "merge" in runs
     # 边扇出/扇入:fetch→5 worker,5 worker→merge
     from_ids = {e.from_ for e in flow.edges}
     to_ids = {e.to for e in flow.edges}
@@ -47,7 +47,7 @@ def test_run_fanout_parallel():
     assert events[-1].type == "end"
     # 5 worker 都 done
     for i in range(5):
-        assert runner.state.steps[f"worker#{i}"].status == "done"
+        assert runner.state.runs[f"worker#{i}"].status == "done"
     # merge 汇总 10 题
     assert runner.artifacts["merge"]["total"] == 10
     # 副本 index 注入正确,各分 2 题
@@ -61,13 +61,13 @@ def test_only_single_replica():
     runner = Runner.load(str(FANOUT))
     events = _events(runner, only={"worker#2"})
     assert events[-1].type == "end"
-    assert runner.state.steps["fetch"].status == "done"
-    assert runner.state.steps["worker#2"].status == "done"
+    assert runner.state.runs["fetch"].status == "done"
+    assert runner.state.runs["worker#2"].status == "done"
     # 其他副本未跑
     for i in (0, 1, 3, 4):
-        assert runner.state.steps[f"worker#{i}"].status == "idle"
+        assert runner.state.runs[f"worker#{i}"].status == "idle"
     # merge 是 worker 下游,不在 only target,未跑
-    assert runner.state.steps["merge"].status == "idle"
+    assert runner.state.runs["merge"].status == "idle"
     assert "merge" not in runner.artifacts
 
 
@@ -103,11 +103,11 @@ def test_accept_failure_emits_skip(tmp_path: Path):
     assert any(
         e.type == "trace"
         and e.status == "skipped"
-        and e.step_id == "b"
+        and e.run_id == "b"
         for e in events
     )
     # b 未执行 run,artifact 为 None(占位),job 正常完成
-    assert runner.state.steps["b"].status == "skipped"
+    assert runner.state.runs["b"].status == "skipped"
     assert runner.artifacts.get("b") is None
     assert runner.state.status == "done"
     assert not any(e.type == "error" for e in events)
@@ -136,7 +136,7 @@ def test_deliver_failure_emits_error(tmp_path: Path):
     runner = Runner.load(str(d))
     events = _events(runner)
     assert any(
-        e.type == "error" and "脱手确认失败" in (e.message or "") and e.step_id == "x"
+        e.type == "error" and "脱手确认失败" in (e.message or "") and e.run_id == "x"
         for e in events
     )
     assert runner.state.status == "error"

@@ -26,13 +26,13 @@ class Export(Node):
 默认 run 模式下,目录形如:
 
 ```text
-/tmp/easyflow/outputs/<flow_id>/<job_id>/<step_id>/
+/tmp/easyflow/outputs/<flow_id>/<job_id>/<run_id>/
 ```
 
 指定 `--out` 后,目录形如:
 
 ```text
-<out>/<step_id>/
+<out>/<run_id>/
 ```
 
 ## artifact.json
@@ -40,7 +40,7 @@ class Export(Node):
 当节点 `done` 或 `skipped` 后,框架会在可持久化模式下写入:
 
 ```text
-<step_id>/artifact.json
+<run_id>/artifact.json
 ```
 
 它保存的是 `run()` 返回值:
@@ -65,13 +65,13 @@ easyflow run ./my_flow --out ./runs/video-a
 这会让每个节点写入:
 
 ```text
-./runs/video-a/<step_id>/
+./runs/video-a/<run_id>/
 ```
 
 并在节点完成后写:
 
 ```text
-./runs/video-a/<step_id>/artifact.json
+./runs/video-a/<run_id>/artifact.json
 ```
 
 ## --from

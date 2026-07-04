@@ -1,8 +1,8 @@
-"""节点定义:Node 基类、StepContext、Checkpoint 枚举、FanOut 动态扇出指令。
+"""节点定义:Node 基类、DepthScope 上下文协议、Checkpoint 枚举、FanOut 动态扇出指令。
 
 每个节点是一个 .py 文件,文件内定义 Node 子类:
 
-    from easyflow import Node, StepContext, Checkpoint
+    from easyflow import Node, DepthScope, Checkpoint
 
     class GenSrt(Node):
         id = "gen_srt"
@@ -41,6 +41,10 @@ accept/deliver 默认返回 True,子类按需 override。
         def run(self, ctx) -> dict:
             results = ctx.gather("worker")   # 语义化收集所有副本产物
             return {"all": results}
+
+Node 既是用户继承的定义基类,又是运行时实例:loader/runner 实例化 Node 子类,
+注入 replica_id/index/depth/output_dir 等运行时字段。副本就是同一 Node 类的多个实例,
+不需要中间层抽象。
 """
 
 from __future__ import annotations
@@ -74,8 +78,12 @@ class FanOut:
         return len(self.payload)
 
 
-class StepContext(Protocol):
-    """运行时注入给 Node.run/accept 的上下文。
+class DepthScope(Protocol):
+    """运行时注入给 Node.run/accept 的 depth 作用域。
+
+    同 depth 的所有副本共享同一份上游产物视图(_artifacts 全局引用),
+    只有 fanout_payload 是 per-run 私有。ctx 因此表达的是 depth 作用域,
+    不是单个节点的私有上下文。
 
     ctx.get(upstream_id) 取上游节点已完成的 artifact。
     ctx.upstream_ids() 取所有已完成的上游 node id(扇入节点枚举各副本用)。
@@ -98,7 +106,10 @@ class StepContext(Protocol):
 
 
 class Node:
-    """节点基类。子类设 id/title/checkpoint 类属性,实现 run,按需 override accept/deliver。"""
+    """节点基类。子类设 id/title/checkpoint 类属性,实现 run,按需 override accept/deliver。
+
+    既是用户继承的定义基类,又是运行时实例:loader/runner 实例化后注入运行时字段。
+    """
 
     id: str = ""
     title: str = ""
@@ -110,8 +121,10 @@ class Node:
     depth: int = 0
     # 产物目录,框架注入;节点把大文件写到这里,run 返回的 dict 登记文件路径供下游读取
     output_dir: Path = Path()
+    # 动态扇出载荷,框架注入第 i 份任务(仅 dynamic base 副本有)
+    fanout_payload: Any = None
 
-    def accept(self, ctx: StepContext) -> bool:
+    def accept(self, ctx: DepthScope) -> bool:
         """接手确认:run 前校验前置条件。返回 False → 跳过本节点(emit skipped,artifact None)。默认通过。"""
         return True
 
@@ -119,34 +132,17 @@ class Node:
         """脱手确认:run 后校验产物。默认通过。"""
         return True
 
-    def run(self, ctx: StepContext) -> Any:
+    def run(self, ctx: DepthScope) -> Any:
         """子类必须实现,返回 artifact。"""
         raise NotImplementedError(f"{type(self).__name__} 未实现 run")
 
 
-@dataclass
-class StepDefine:
-    """节点运行时定义:由 loader 从 Node 子类实例化产出。"""
-
-    id: str
-    title: str
-    checkpoint: Checkpoint
-    node: Node
-    depth: int = 0
-
-
 def _instantiate(
     node_cls: type[Node], replica_id: str, index: int, depth: int = 0
-) -> StepDefine:
-    """实例化一个 Node 子类为 StepDefine,注入副本信息与拓扑深度。"""
+) -> Node:
+    """实例化一个 Node 子类为运行时实例,注入副本信息与拓扑深度。"""
     node = node_cls()
     node.replica_id = replica_id
     node.index = index
     node.depth = depth
-    return StepDefine(
-        id=replica_id,
-        title=node.title or node_cls.id,
-        checkpoint=node.checkpoint,
-        node=node,
-        depth=depth,
-    )
+    return node

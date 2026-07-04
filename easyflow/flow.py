@@ -37,7 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .step import StepDefine
+from .node import Node
 
 
 @dataclass(frozen=True)
@@ -49,10 +49,10 @@ class Edge:
 
 
 def edge(from_: Any, to: Any) -> Edge:
-    """声明一条边。参数可传 id 字符串或 StepDefine 对象(取其 id)。"""
+    """声明一条边。参数可传 id 字符串或 Node 实例(取其 id)。"""
 
     def as_id(x: Any) -> str:
-        if isinstance(x, StepDefine):
+        if isinstance(x, Node):
             return x.id
         return str(x)
 

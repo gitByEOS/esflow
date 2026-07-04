@@ -4,6 +4,7 @@
     easyflow run ./my_flow                      # 全跑,checkpoint 时 stdin 等命令
     easyflow run ./my_flow --out ./runs/a       # 产物写入指定目录,用于后续续跑
     easyflow run ./my_flow --out ./runs/a --from translate  # 从指定节点续跑到末端
+    easyflow run ./my_flow --out ./runs/a --from-depth 2    # 从拓扑深度 2 起续跑到末端
     easyflow run ./my_flow --node worker#2      # 单调试指定副本及其上游
     easyflow debug ./my_flow                    # 调试模式:产物固定到 /tmp/easyflow/debug/<flow_id>/,持久化 artifact
     easyflow debug ./my_flow --node worker#2    # 单调试复用上游持久化产物,只跑指定节点
@@ -23,13 +24,13 @@ from .runner import Runner
 from .state import JobStatus
 
 
-def _handle_checkpoint_command(runner: Runner, command: str, step_id: str | None) -> None:
+def _handle_checkpoint_command(runner: Runner, command: str, run_id: str | None) -> None:
     """处理 checkpoint 短命令:c=继续,r=重试当前,a=中止。"""
     cmd = command.strip().lower()
     if not cmd or cmd == "c":
         runner.resume()
     elif cmd == "r":
-        runner.retry(step_id or "")
+        runner.retry(run_id or "")
     elif cmd == "a":
         runner.abort()
     else:
@@ -41,15 +42,16 @@ async def _run_cli(
     flow_dir: str,
     only: set[str] | None,
     out: str | None = None,
-    from_steps: set[str] | None = None,
+    from_node: str | None = None,
+    from_depth: int | None = None,
 ) -> int:
     runner = Runner.load(flow_dir, job_dir=Path(out) if out else None)
-    async for event in runner.run(only=only, from_steps=from_steps):
+    async for event in runner.run(only=only, from_node=from_node, from_depth=from_depth):
         easyflow_event(event)
         if event.type == "checkpoint":
             print("(c) continue, (r) retry, (a) abort:", end=" ", flush=True)
             line = sys.stdin.readline().strip()
-            _handle_checkpoint_command(runner, line, event.step_id)
+            _handle_checkpoint_command(runner, line, event.run_id)
         if event.type == "end":
             return 0 if runner.state.status != JobStatus.ERROR else 1
     return 0
@@ -57,17 +59,20 @@ async def _run_cli(
 
 def cmd_run(args) -> int:
     only = set(args.node) if args.node else None
-    from_steps = set(args.from_steps) if args.from_steps else None
-    if from_steps and not args.out:
+    from_node = args.from_node or None
+    from_depth = args.from_depth if args.from_depth is not None else None
+    if from_node and not args.out:
         print("--from 需要同时指定 --out", file=sys.stderr)
         return 1
-    if from_steps:
+    if from_depth is not None and not args.out:
+        print("--from-depth 需要同时指定 --out", file=sys.stderr)
+        return 1
+    if from_node:
         pre = Runner.load(args.flow_dir, job_dir=Path(args.out))
-        unknown = sorted(sid for sid in from_steps if sid not in pre.steps)
-        if unknown:
-            print(f"未知节点:{' '.join(unknown)}", file=sys.stderr)
+        if from_node not in pre.runs:
+            print(f"未知节点:{from_node}", file=sys.stderr)
             return 1
-        missing = pre.missing_upstream(from_steps)
+        missing = pre.missing_upstream({from_node})
         if missing:
             print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
             print(
@@ -75,7 +80,24 @@ def cmd_run(args) -> int:
                 file=sys.stderr,
             )
             return 1
-    return asyncio.run(_run_cli(args.flow_dir, only, args.out, from_steps))
+    if from_depth is not None:
+        pre = Runner.load(args.flow_dir, job_dir=Path(args.out))
+        if from_depth < 0 or from_depth > pre.max_depth:
+            print(
+                f"--from-depth 越界:{from_depth},有效范围 [0, {pre.max_depth}]",
+                file=sys.stderr,
+            )
+            return 1
+        target = pre._target_by_depth(from_depth)
+        missing = pre.missing_upstream(target)
+        if missing:
+            print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
+            print(
+                f"先全跑落产物:easyflow run {args.flow_dir} --out {args.out}",
+                file=sys.stderr,
+            )
+            return 1
+    return asyncio.run(_run_cli(args.flow_dir, only, args.out, from_node, from_depth))
 
 
 def cmd_debug(args) -> int:
@@ -311,11 +333,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_scope.add_argument(
         "--from",
-        dest="from_steps",
-        nargs="+",
+        dest="from_node",
         default=None,
         metavar="NODE",
         help="从指定节点续跑到末端,上游从 --out 目录复用",
+    )
+    run_scope.add_argument(
+        "--from-depth",
+        dest="from_depth",
+        type=int,
+        default=None,
+        metavar="N",
+        help="从拓扑深度 N 起重跑到末端,上游 depth<N 从 --out 目录复用",
     )
     p_run.add_argument(
         "--out",

@@ -16,7 +16,8 @@
 脱手确认(deliver)run 后校验,失败 emit error。
 checkpoint 时整个 job 暂停,等控制信号。
 动态扇出:节点 run 返回 FanOut,runner 运行时创建副本 + 动态连边。
-retry 时不重跑已完成且无依赖变更的上游,只重跑 from_step 及其下游。
+retry 时不重跑已完成且无依赖变更的上游,只重跑 from_node 及其下游。
+from_depth 按拓扑深度续跑:重跑 depth >= N 的所有节点,上游 depth < N 复用。
 """
 
 from __future__ import annotations
@@ -30,11 +31,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Literal, NamedTuple
 
-from .event import WorkflowJobEvent, trace, final, checkpoint, error, end
+from .event import JobEvent, trace, final, checkpoint, error, end
 from .flow import Edge, FlowDefine
 from .loader import load_flow
-from .state import JobState, JobStatus, StepState, StepStatus, apply_event
-from .step import Checkpoint, FanOut, Node, StepDefine, _instantiate
+from .state import JobState, JobStatus, RunState, NodeStatus, apply_event
+from .node import Checkpoint, FanOut, Node, DepthScope, _instantiate
 
 DEFAULT_OUTPUT_ROOT = Path("/tmp/easyflow/outputs")
 DEBUG_OUTPUT_ROOT = Path("/tmp/easyflow/debug")
@@ -51,15 +52,15 @@ def _gen_job_id() -> str:
 @dataclass
 class _ControlSignal:
     kind: str  # resume / retry / abort
-    from_step: str | None = None
+    from_node: str | None = None
 
 
 # run() 加载策略:决定启动前如何处理 job_dir 持久化产物
 _LoadStrategy = Literal[
     "load_all",                       # 全量加载已完成产物,跳过已完成节点
-    "load_skip_target",               # 加载但跳过 target,强制重跑 target(scope 单点调试)
+    "load_skip_target",               # 加载但跳过 target,强制重跑 target(nodes 单点调试)
     "invalidate_all",                 # 清掉所有节点状态与产物(--out 全跑)
-    "load_skip_target_then_invalidate",  # 加载跳过 target 后再清 target(from_steps 续跑)
+    "load_skip_target_then_invalidate",  # 加载跳过 target 后再清 target(from_node 续跑)
 ]
 
 
@@ -74,28 +75,36 @@ class _RunArgs(NamedTuple):
 def _parse_run_args(
     only: set[str] | None,
     break_before: set[str] | None,
-    scope: set[str] | None,
-    from_steps: set[str] | None,
+    nodes: set[str] | None,
+    from_node: str | None,
+    from_depth: int | None,
     persist_artifacts: bool,
     explicit_job_dir: bool,
     downstream: Callable[[str], set[str]],
     required: Callable[[set[str]], set[str]],
+    target_by_depth: Callable[[int], set[str]],
 ) -> _RunArgs:
-    """把 run() 的 4 个互斥入参解析成统一的 _RunArgs。
+    """把 run() 的 5 个互斥入参解析成统一的 _RunArgs。
 
-    优先级:from_steps > scope > only > 默认。各模式推导 target 与加载策略:
-    - from_steps: target = from_steps 各自下游并集,加载跳过 target 后再清 target(续跑)
-    - scope:     target = scope 本身,加载跳过 target(单点调试上游复用)
-    - only:      target = only 及其上游,全量加载(跑必需闭包)
-    - 默认:      target = None,explicit_job_dir 时清全部,否则全量加载
+    优先级:from_node > from_depth > nodes > only > 默认。各模式推导 target 与加载策略:
+    - from_node:  target = from_node 下游,加载跳过 target 后再清 target(续跑)
+    - from_depth: target = depth >= from_depth 的节点,加载跳过 target 后再清 target(按层续跑)
+    - nodes:      target = nodes 本身,加载跳过 target(单点调试上游复用)
+    - only:       target = only 及其上游,全量加载(跑必需闭包)
+    - 默认:       target = None,explicit_job_dir 时清全部,否则全量加载
     """
-    if from_steps is not None:
+    if from_node is not None:
         if not persist_artifacts:
-            raise RuntimeError("from_steps 需要可复用的 artifact 目录")
-        target = set().union(*(downstream(s) for s in from_steps))
+            raise RuntimeError("from_node 需要可复用的 artifact 目录")
+        target = downstream(from_node)
         return _RunArgs(target, break_before, "load_skip_target_then_invalidate")
-    if scope is not None:
-        return _RunArgs(set(scope), break_before, "load_skip_target")
+    if from_depth is not None:
+        if not persist_artifacts:
+            raise RuntimeError("from_depth 需要可复用的 artifact 目录")
+        target = target_by_depth(from_depth)
+        return _RunArgs(target, break_before, "load_skip_target_then_invalidate")
+    if nodes is not None:
+        return _RunArgs(set(nodes), break_before, "load_skip_target")
     if only is not None:
         return _RunArgs(required(only), break_before, "load_all")
     if explicit_job_dir:
@@ -104,7 +113,11 @@ def _parse_run_args(
 
 
 class _Ctx:
-    """运行时 StepContext 实现:取上游 artifact + 动态扇出 payload/gather + 同层/跨层 layer。"""
+    """运行时 DepthScope 实现:取上游 artifact + 动态扇出 payload/gather + 同层/跨层 layer。
+
+    同 depth 的所有副本共享同一份 _artifacts / _depths(全局引用),
+    只有 fanout_payload 是 per-run 私有。ctx 表达的是 depth 作用域,不是节点私有上下文。
+    """
 
     def __init__(
         self,
@@ -128,9 +141,9 @@ class _Ctx:
         """收集某动态 base 的所有副本产物,按 index 排序。"""
         items: list[tuple[int, Any]] = []
         prefix = base_id + "#"
-        for sid, art in self._artifacts.items():
-            if sid.startswith(prefix):
-                i = int(sid.rsplit("#", 1)[1])
+        for rid, art in self._artifacts.items():
+            if rid.startswith(prefix):
+                i = int(rid.rsplit("#", 1)[1])
                 items.append((i, art))
         items.sort()
         return [v for _, v in items]
@@ -139,9 +152,9 @@ class _Ctx:
         """该拓扑深度的所有已完成节点产物 list,按声明顺序(含动态副本展开顺序)。
         skip 节点 artifact 为 None,一并返回便于枚举同层前序。"""
         return [
-            self._artifacts.get(sid)
-            for sid, d in self._depths.items()
-            if d == depth and sid in self._artifacts
+            self._artifacts.get(rid)
+            for rid, d in self._depths.items()
+            if d == depth and rid in self._artifacts
         ]
 
 
@@ -151,14 +164,14 @@ class Runner:
     def __init__(
         self,
         flow: FlowDefine,
-        steps: dict[str, StepDefine],
+        runs: dict[str, Node],
         node_classes: dict[str, type[Node]],
         output_root: Path = DEFAULT_OUTPUT_ROOT,
         debug: bool = False,
         job_dir: Path | None = None,
     ) -> None:
         self.flow = flow
-        self.steps = steps
+        self.runs = runs
         self.node_classes = node_classes
         self.state = JobState(flow_id=flow.id)
         self.artifacts: dict[str, Any] = {}
@@ -171,7 +184,7 @@ class Runner:
         # 邻接表缓存:从 self.flow.edges 派生,动态扩图后 _rebuild_adjacency 重建
         self._upstream_map: dict[str, list[str]] = {}
         self._downstream_map: dict[str, list[str]] = {}
-        # 产物持久化:每节点 output_dir = job_dir / <step_id>,节点自己写文件
+        # 产物持久化:每节点 output_dir = job_dir / <run_id>,节点自己写文件
         # debug 模式:job_dir 固定(无 job_id),产物累积,artifact 持久化供单调试复用上游
         self.debug = debug
         self._explicit_job_dir = job_dir is not None
@@ -186,12 +199,11 @@ class Runner:
             self.job_dir = output_root / flow.id / self.job_id
         # 邻接表先建,_compute_depths 要用
         self._rebuild_adjacency()
-        # 拓扑深度:depth(node) = 1 + max(depth(upstream)),入口 0;回填到 StepDefine 和 Node
+        # 拓扑深度:depth(node) = 1 + max(depth(upstream)),入口 0;回填到 Node 实例
         self._depths = self._compute_depths()
-        for sid, sd in self.steps.items():
-            d = self._depths.get(sid, 0)
-            sd.depth = d
-            sd.node.depth = d
+        for rid, node in self.runs.items():
+            d = self._depths.get(rid, 0)
+            node.depth = d
 
     @classmethod
     def load(
@@ -201,11 +213,11 @@ class Runner:
         debug: bool = False,
         job_dir: Path | str | None = None,
     ) -> "Runner":
-        flow, steps, node_classes = load_flow(flow_dir)
+        flow, runs, node_classes = load_flow(flow_dir)
         resolved_job_dir = Path(job_dir) if job_dir is not None else None
         return cls(
             flow,
-            steps,
+            runs,
             node_classes,
             output_root=output_root,
             debug=debug,
@@ -218,12 +230,12 @@ class Runner:
             return
         shutil.rmtree(self.job_dir, ignore_errors=True)
 
-    def missing_upstream(self, scope: set[str]) -> list[str]:
-        """返回 scope 节点的所有上游中磁盘无 artifact.json 的节点 id 列表。"""
+    def missing_upstream(self, nodes: set[str]) -> list[str]:
+        """返回 nodes 节点的所有上游中磁盘无 artifact.json 的节点 id 列表。"""
         if not self._persist_artifacts:
             return []
         needed: set[str] = set()
-        frontier: set[str] = set(scope)
+        frontier: set[str] = set(nodes)
         while frontier:
             n = frontier.pop()
             for up in self._upstream_map.get(n, []):
@@ -231,8 +243,8 @@ class Runner:
                     needed.add(up)
                     frontier.add(up)
         return [
-            sid for sid in needed
-            if not (self.job_dir / sid / _ARTIFACT_FILE).exists()
+            rid for rid in needed
+            if not (self.job_dir / rid / _ARTIFACT_FILE).exists()
         ]
 
     def _rebuild_adjacency(self) -> None:
@@ -247,27 +259,27 @@ class Runner:
         """算所有节点拓扑深度。动态 base 以 base id 参与算,副本展开时继承 base depth。"""
         depth: dict[str, int] = {}
 
-        def dfs(sid: str) -> int:
-            if sid in depth:
-                return depth[sid]
-            ups = self._upstream_map.get(sid, [])
-            depth[sid] = 0 if not ups else 1 + max(dfs(u) for u in ups)
-            return depth[sid]
+        def dfs(rid: str) -> int:
+            if rid in depth:
+                return depth[rid]
+            ups = self._upstream_map.get(rid, [])
+            depth[rid] = 0 if not ups else 1 + max(dfs(u) for u in ups)
+            return depth[rid]
 
-        for sid in self.steps:
-            dfs(sid)
+        for rid in self.runs:
+            dfs(rid)
         # 动态 base 没实例化但 _expand_fanout 要用其 depth
         for base in self.flow.dynamic:
             if base not in depth:
                 dfs(base)
         return depth
 
-    def _persist_artifact(self, sid: str, artifact: Any) -> None:
+    def _persist_artifact(self, rid: str, artifact: Any) -> None:
         """持久化模式:节点 done/skipped 后把 artifact 序列化到 output_dir/artifact.json。
         Path 等非 JSON 类型用 default=str 兜底;FanOut 不持久化(动态扩图指令非产物)。"""
         if not self._persist_artifacts:
             return
-        out = self.job_dir / sid
+        out = self.job_dir / rid
         out.mkdir(parents=True, exist_ok=True)
         (out / _ARTIFACT_FILE).write_text(
             json.dumps(artifact, ensure_ascii=False, indent=2, default=str),
@@ -275,44 +287,44 @@ class Runner:
         )
 
     def _load_persisted_artifacts(self, skip: set[str] | None = None) -> None:
-        """持久化模式:启动时扫描 job_dir/<sid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
+        """持久化模式:启动时扫描 job_dir/<rid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
         已完成节点被 _ready_nodes 自然跳过,单调试时上游产物直接复用,不重跑。
-        skip 内的节点不加载(强制重跑)——scope 单点调试时跳过目标节点本身。"""
+        skip 内的节点不加载(强制重跑)——nodes 单点调试时跳过目标节点本身。"""
         if not self._persist_artifacts or not self.job_dir.exists():
             return
         skip = skip or set()
-        for sid in self.steps:
-            if sid in skip:
+        for rid in self.runs:
+            if rid in skip:
                 continue
-            art_file = self.job_dir / sid / _ARTIFACT_FILE
+            art_file = self.job_dir / rid / _ARTIFACT_FILE
             if not art_file.exists():
                 continue
             try:
                 artifact = json.loads(art_file.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            self.artifacts[sid] = artifact
-            st = self.state.steps.setdefault(sid, StepState(step_id=sid))
-            st.status = StepStatus.SKIPPED if artifact is None else StepStatus.DONE
+            self.artifacts[rid] = artifact
+            st = self.state.runs.setdefault(rid, RunState(run_id=rid))
+            st.status = NodeStatus.SKIPPED if artifact is None else NodeStatus.DONE
             st.artifact = artifact
 
-    def _invalidate_steps(self, scope: set[str]) -> None:
+    def _invalidate_runs(self, nodes: set[str]) -> None:
         """清掉本次要重跑节点的内存状态与磁盘产物。"""
-        for sid in scope:
-            self.artifacts.pop(sid, None)
-            st = self.state.steps.get(sid)
+        for rid in nodes:
+            self.artifacts.pop(rid, None)
+            st = self.state.runs.get(rid)
             if st:
-                st.status = StepStatus.IDLE
+                st.status = NodeStatus.IDLE
                 st.artifact = None
                 st.detail = ""
                 st.text = ""
             if self._persist_artifacts:
-                shutil.rmtree(self.job_dir / sid, ignore_errors=True)
+                shutil.rmtree(self.job_dir / rid, ignore_errors=True)
 
-    def _downstream(self, from_step: str) -> set[str]:
-        """from_step 及其所有下游(含自己)。"""
-        result = {from_step}
-        frontier = [from_step]
+    def _downstream(self, from_node: str) -> set[str]:
+        """from_node 及其所有下游(含自己)。"""
+        result = {from_node}
+        frontier = [from_node]
         while frontier:
             n = frontier.pop()
             for m in self._downstream_map.get(n, []):
@@ -333,39 +345,48 @@ class Runner:
                     frontier.append(up)
         return target
 
+    def _target_by_depth(self, n: int) -> set[str]:
+        """from_depth 用:depth >= n 的所有运行实例 id。"""
+        return {rid for rid, d in self._depths.items() if d >= n}
+
+    @property
+    def max_depth(self) -> int:
+        """当前 DAG 最大拓扑深度,from_depth 越界校验用。"""
+        return max(self._depths.values()) if self._depths else 0
+
     def _ready_nodes(self) -> list[str]:
         """上游全部 done/skipped 且自己未 done/skipped/paused 的节点(单调试时限定 target 内)。"""
         completed = {
-            sid
-            for sid, s in self.state.steps.items()
-            if s.status in (StepStatus.DONE, StepStatus.SKIPPED)
+            rid
+            for rid, s in self.state.runs.items()
+            if s.status in (NodeStatus.DONE, NodeStatus.SKIPPED)
         }
         not_ready = completed | {
-            sid for sid, s in self.state.steps.items() if s.status == StepStatus.PAUSED
+            rid for rid, s in self.state.runs.items() if s.status == NodeStatus.PAUSED
         }
         ready: list[str] = []
-        for sid in self.steps:
-            if sid in not_ready:
+        for rid in self.runs:
+            if rid in not_ready:
                 continue
-            if self._target is not None and sid not in self._target:
+            if self._target is not None and rid not in self._target:
                 continue
-            if all(u in completed for u in self._upstream_map.get(sid, [])):
-                ready.append(sid)
+            if all(u in completed for u in self._upstream_map.get(rid, [])):
+                ready.append(rid)
         return ready
 
     def _paused_nodes(self) -> list[str]:
-        return [sid for sid, s in self.state.steps.items() if s.status == StepStatus.PAUSED]
+        return [rid for rid, s in self.state.runs.items() if s.status == NodeStatus.PAUSED]
 
     def _apply_serial(self, ready: list[str]) -> list[str]:
         """serial 节点同层依次启动:ready 中属于 serial 集合的,只保留 flow.nodes 顺序最靠前的那个;
         非 serial 节点照常并行。返回实际本轮启动的节点列表。"""
-        serial_ready = [sid for sid in ready if sid in self.flow.serial]
+        serial_ready = [rid for rid in ready if rid in self.flow.serial]
         if len(serial_ready) <= 1:
             return ready
         # 按 flow.nodes 声明顺序取第一个
-        order = {sid: i for i, sid in enumerate(self.flow.nodes)}
+        order = {rid: i for i, rid in enumerate(self.flow.nodes)}
         first = min(serial_ready, key=lambda s: order.get(s, len(order)))
-        return [sid for sid in ready if sid not in self.flow.serial or sid == first]
+        return [rid for rid in ready if rid not in self.flow.serial or rid == first]
 
     def _expand_fanout(self, fanout_node: str, fanout: FanOut) -> None:
         """运行时动态扩图:创建 N 个副本,改写边(上游→副本→下游)。"""
@@ -381,11 +402,11 @@ class Runner:
         # 创建副本实例,注入 fanout_payload / depth / output_dir
         for i in range(n):
             rid = f"{base}#{i}"
-            sd = _instantiate(self.node_classes[base], rid, i, depth=base_depth)
-            sd.node.fanout_payload = fanout.payload[i]
-            sd.node.output_dir = self.job_dir / rid
-            self.steps[rid] = sd
-            self.state.steps[rid] = StepState(step_id=rid)
+            node = _instantiate(self.node_classes[base], rid, i, depth=base_depth)
+            node.fanout_payload = fanout.payload[i]
+            node.output_dir = self.job_dir / rid
+            self.runs[rid] = node
+            self.state.runs[rid] = RunState(run_id=rid)
             self._depths[rid] = base_depth
         # 改写边:移除原 base 边,加 上游→副本 / 副本→下游
         new_edges = [
@@ -400,14 +421,13 @@ class Runner:
         self.flow.edges = new_edges
         self._rebuild_adjacency()
 
-    async def _run_one(self, sid: str, queue: asyncio.Queue) -> None:
+    async def _run_one(self, rid: str, queue: asyncio.Queue) -> None:
         """跑单个节点:accept → run → deliver / FanOut,事件推入 queue。完成推 None。"""
-        sd = self.steps[sid]
-        node = sd.node
+        node = self.runs[rid]
         # 注入产物目录路径(skip 节点不创建目录,accept 通过后才 mkdir)
-        node.output_dir = self.job_dir / sid
-        await queue.put(trace(sid, "queued", f"就绪:{sd.title}"))
-        await queue.put(trace(sid, "running", f"开始:{sd.title}"))
+        node.output_dir = self.job_dir / rid
+        await queue.put(trace(rid, "queued", f"就绪:{node.title or node.id}"))
+        await queue.put(trace(rid, "running", f"开始:{node.title or node.id}"))
         ctx = _Ctx(
             self.artifacts, depths=self._depths,
             fanout_payload=getattr(node, "fanout_payload", None),
@@ -417,13 +437,13 @@ class Runner:
         try:
             ok = node.accept(ctx)
         except Exception as exc:
-            await queue.put(error(sid, f"接手确认异常:{type(exc).__name__}: {exc}"))
+            await queue.put(error(rid, f"接手确认异常:{type(exc).__name__}: {exc}"))
             await queue.put(None)
             return
         if not ok:
-            self.artifacts[sid] = None
-            self._persist_artifact(sid, None)
-            await queue.put(trace(sid, "skipped", f"跳过:{sd.title}"))
+            self.artifacts[rid] = None
+            self._persist_artifact(rid, None)
+            await queue.put(trace(rid, "skipped", f"跳过:{node.title or node.id}"))
             await queue.put(None)
             return
 
@@ -434,16 +454,16 @@ class Runner:
         try:
             result = await asyncio.to_thread(node.run, ctx)
         except Exception as exc:
-            await queue.put(error(sid, f"{type(exc).__name__}: {exc}"))
+            await queue.put(error(rid, f"{type(exc).__name__}: {exc}"))
             await queue.put(None)
             return
 
         # 动态扇出:run 返回 FanOut,扩图,本节点不产 artifact
         if isinstance(result, FanOut):
-            self.state.steps[sid].status = StepStatus.DONE
-            self._expand_fanout(sid, result)
+            self.state.runs[rid].status = NodeStatus.DONE
+            self._expand_fanout(rid, result)
             await queue.put(
-                trace(sid, "done", f"扇出 {result.n} 个 {result.base} 副本")
+                trace(rid, "done", f"扇出 {result.n} 个 {result.base} 副本")
             )
             await queue.put(None)
             return
@@ -452,41 +472,41 @@ class Runner:
         try:
             ok = node.deliver(result)
         except Exception as exc:
-            await queue.put(error(sid, f"脱手确认异常:{type(exc).__name__}: {exc}"))
+            await queue.put(error(rid, f"脱手确认异常:{type(exc).__name__}: {exc}"))
             await queue.put(None)
             return
         if not ok:
-            await queue.put(error(sid, "脱手确认失败:产物校验不通过"))
+            await queue.put(error(rid, "脱手确认失败:产物校验不通过"))
             await queue.put(None)
             return
 
-        self.artifacts[sid] = result
-        self._persist_artifact(sid, result)
-        await queue.put(final(sid, result))
-        if sd.checkpoint == Checkpoint.AFTER:
-            await queue.put(checkpoint(sid, result))
+        self.artifacts[rid] = result
+        self._persist_artifact(rid, result)
+        await queue.put(final(rid, result))
+        if node.checkpoint == Checkpoint.AFTER:
+            await queue.put(checkpoint(rid, result))
         await queue.put(None)
 
-    async def _await_control(self) -> AsyncGenerator[WorkflowJobEvent, None]:
+    async def _await_control(self) -> AsyncGenerator[JobEvent, None]:
         """checkpoint 暂停后等控制信号,处理 resume/retry/abort。无事件产出。"""
         await self._resume_event.wait()
         self._resume_event.clear()
         ctrl = self._control
         self._control = None
         if ctrl is None or ctrl.kind == "resume":
-            for sid in self._paused_nodes():
-                st = self.state.steps[sid]
+            for rid in self._paused_nodes():
+                st = self.state.runs[rid]
                 # checkpoint AFTER 暂停:artifact 已写入,确认后转 done
                 # break_before 暂停:artifact 为 None,转 idle 让下一轮重新就绪执行
-                st.status = StepStatus.DONE if st.artifact is not None else StepStatus.IDLE
+                st.status = NodeStatus.DONE if st.artifact is not None else NodeStatus.IDLE
             self.state.status = JobStatus.RUNNING
         elif ctrl.kind == "retry":
-            ds = self._downstream(ctrl.from_step or "")
+            ds = self._downstream(ctrl.from_node or "")
             for s2 in ds:
                 self.artifacts.pop(s2, None)
-                st = self.state.steps.get(s2)
+                st = self.state.runs.get(s2)
                 if st:
-                    st.status = StepStatus.IDLE
+                    st.status = NodeStatus.IDLE
                     st.artifact = None
                 # debug 模式:清磁盘 artifact.json,防止下次启动加载到旧产物
                 if self.debug:
@@ -500,47 +520,53 @@ class Runner:
         """按 _RunArgs.load_strategy 处理 job_dir 持久化产物,run() 开头调用一次。
 
         load_all:                       全量加载,已完成节点跳过
-        load_skip_target:               加载但跳过 target(scope 单点调试反复执行 X)
+        load_skip_target:               加载但跳过 target(nodes 单点调试反复执行 X)
         invalidate_all:                 清掉所有节点状态与产物(--out 全跑)
-        load_skip_target_then_invalidate:加载跳过 target 后再清 target(from_steps 续跑)
+        load_skip_target_then_invalidate:加载跳过 target 后再清 target(from_node 续跑)
         """
         if args.load_strategy == "load_all":
             self._load_persisted_artifacts()
         elif args.load_strategy == "load_skip_target":
             self._load_persisted_artifacts(skip=args.target)
         elif args.load_strategy == "invalidate_all":
-            self._invalidate_steps(set(self.steps))
+            self._invalidate_runs(set(self.runs))
         elif args.load_strategy == "load_skip_target_then_invalidate":
             self._load_persisted_artifacts(skip=args.target)
-            self._invalidate_steps(args.target or set())
+            self._invalidate_runs(args.target or set())
 
     async def run(
         self,
         only: set[str] | None = None,
         break_before: set[str] | None = None,
-        scope: set[str] | None = None,
-        from_steps: set[str] | None = None,
-    ) -> AsyncGenerator[WorkflowJobEvent, None]:
+        nodes: set[str] | None = None,
+        from_node: str | None = None,
+        from_depth: int | None = None,
+    ) -> AsyncGenerator[JobEvent, None]:
         """执行 flow,产出事件流。
 
         only 指定时只跑 only 及其必需上游(单调试,run 模式用,无持久化必须跑上游)。
-        scope 指定时 _target 限定为 scope 本身(不含上游),上游必须已完成否则 scope
+        nodes 指定时 _target 限定为 nodes 本身(不含上游),上游必须已完成否则 nodes
         节点不就绪——debug --node 用,上游从磁盘加载产物,只反复跑指定节点。
-        from_steps 指定时只重跑这些节点及下游,上游从 job_dir artifact.json 复用。
+        from_node 指定时只重跑该节点及下游,上游从 job_dir artifact.json 复用。
+        from_depth 指定时重跑 depth >= from_depth 的所有节点,上游 depth < from_depth 复用。
         break_before 指定时,这些节点就绪后不立即执行,先 emit checkpoint 暂停,
         等 resume 信号才转 idle 重新就绪执行——用于 view 在指定节点前停下来观察。
         """
+        if from_depth is not None and (from_depth < 0 or from_depth > self.max_depth):
+            raise RuntimeError(
+                f"from_depth 越界:{from_depth},有效范围 [0, {self.max_depth}]"
+            )
         args = _parse_run_args(
-            only, break_before, scope, from_steps,
+            only, break_before, nodes, from_node, from_depth,
             self._persist_artifacts, self._explicit_job_dir,
-            self._downstream, self._required,
+            self._downstream, self._required, self._target_by_depth,
         )
         self._target = args.target
         self._break_before = set(args.break_before) if args.break_before else None
         self._break_triggered = False
-        for sid in self.steps:
-            if sid not in self.state.steps:
-                self.state.steps[sid] = StepState(step_id=sid)
+        for rid in self.runs:
+            if rid not in self.state.runs:
+                self.state.runs[rid] = RunState(run_id=rid)
         self.state.status = JobStatus.RUNNING
         self.state.finished = False
         self._apply_load_strategy(args)
@@ -569,19 +595,19 @@ class Runner:
             # break_before:首次就绪时把目标节点从本轮移除,设 paused + emit checkpoint,
             # 其他节点照常跑。一次性触发,resume 后不再拦截
             if self._break_before and not self._break_triggered:
-                hits = [sid for sid in to_run if sid in self._break_before]
+                hits = [rid for rid in to_run if rid in self._break_before]
                 if hits:
                     self._break_triggered = True
-                    to_run = [sid for sid in to_run if sid not in self._break_before]
-                    for sid in hits:
-                        self.state.steps[sid].status = StepStatus.PAUSED
-                        yield checkpoint(sid, None)
-                        apply_event(self.state, checkpoint(sid, None))
+                    to_run = [rid for rid in to_run if rid not in self._break_before]
+                    for rid in hits:
+                        self.state.runs[rid].status = NodeStatus.PAUSED
+                        yield checkpoint(rid, None)
+                        apply_event(self.state, checkpoint(rid, None))
 
             # 同轮就绪节点并行跑,事件经 queue 顺序产出
             queue: asyncio.Queue = asyncio.Queue()
             tasks = [
-                asyncio.create_task(self._run_one(sid, queue)) for sid in to_run
+                asyncio.create_task(self._run_one(rid, queue)) for rid in to_run
             ]
             active = len(tasks)
             errored = False
@@ -613,9 +639,9 @@ class Runner:
         self._control = _ControlSignal(kind="resume")
         self._resume_event.set()
 
-    def retry(self, from_step: str) -> None:
-        """从 from_step 重跑:清 from_step 及下游的 artifact 与状态,上游复用。"""
-        self._control = _ControlSignal(kind="retry", from_step=from_step)
+    def retry(self, from_node: str) -> None:
+        """从 from_node 重跑:清 from_node 及下游的 artifact 与状态,上游复用。"""
+        self._control = _ControlSignal(kind="retry", from_node=from_node)
         self._resume_event.set()
 
     def abort(self) -> None:

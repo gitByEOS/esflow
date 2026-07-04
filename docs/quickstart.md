@@ -104,6 +104,6 @@ class GenSrt(Node):
 ## 下一步
 
 - 产物目录和续跑: [artifacts.md](artifacts.md)
-- 执行语义: [semantics.md](semantics.md)
-- 事件协议: [events.md](events.md)
+- 调试模式: [debug.md](debug.md)
 - 启动预检: [pass_check.md](pass_check.md)
+- 参考手册（按类）: [ref/README.md](ref/README.md)

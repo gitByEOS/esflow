@@ -8,15 +8,15 @@ from pathlib import Path
 import pytest
 
 from easyflow import Runner
-from easyflow.event import WorkflowJobEvent
+from easyflow.event import JobEvent
 from easyflow.loader import load_flow, FlowLoadError
 
 
 DYN = Path(__file__).resolve().parent.parent / "examples" / "fanout_dynamic"
 
 
-def _events(runner: Runner, only: set[str] | None = None) -> list[WorkflowJobEvent]:
-    out: list[WorkflowJobEvent] = []
+def _events(runner: Runner, only: set[str] | None = None) -> list[JobEvent]:
+    out: list[JobEvent] = []
 
     async def drive():
         async for ev in runner.run(only=only):
@@ -30,14 +30,14 @@ def _events(runner: Runner, only: set[str] | None = None) -> list[WorkflowJobEve
 
 def test_load_dynamic_not_preinstantiated():
     """dynamic base 不预实例化,但参与 nodes 与无环校验。"""
-    flow, steps, node_classes = load_flow(str(DYN))
+    flow, runs, node_classes = load_flow(str(DYN))
     assert flow.id == "fanout_dynamic"
     assert "worker" in flow.dynamic
     # worker 未预实例化
-    assert not any(sid.startswith("worker#") for sid in steps)
-    assert "worker" not in steps
+    assert not any(rid.startswith("worker#") for rid in runs)
+    assert "worker" not in runs
     # 其他节点正常
-    assert {"ingest", "split", "merge"} <= set(steps)
+    assert {"ingest", "split", "merge"} <= set(runs)
     # node_classes 含 worker 类供 runner 实例化
     assert "worker" in node_classes
 
@@ -48,10 +48,10 @@ def test_run_dynamic_fanout():
     events = _events(runner)
     assert events[-1].type == "end"
     # 4 章 → 4 个 worker 副本
-    worker_ids = [sid for sid in runner.state.steps if sid.startswith("worker#")]
+    worker_ids = [rid for rid in runner.state.runs if rid.startswith("worker#")]
     assert len(worker_ids) == 4
-    for sid in worker_ids:
-        assert runner.state.steps[sid].status == "done"
+    for rid in worker_ids:
+        assert runner.state.runs[rid].status == "done"
     # merge 汇总 4 章
     assert runner.artifacts["merge"]["total_chapters"] == 4
 
@@ -123,12 +123,12 @@ def test_split_accept_failure(tmp_path: Path):
     events = _events(runner)
     # split accept False → 被 skip,不扇出,job 正常完成
     assert any(
-        e.type == "trace" and e.status == "skipped" and e.step_id == "split"
+        e.type == "trace" and e.status == "skipped" and e.run_id == "split"
         for e in events
     )
-    assert runner.state.steps["split"].status == "skipped"
+    assert runner.state.runs["split"].status == "skipped"
     # 未扇出
-    assert not any(sid.startswith("w#") for sid in runner.state.steps)
+    assert not any(rid.startswith("w#") for rid in runner.state.runs)
     assert runner.state.status == "done"
 
 
@@ -229,7 +229,7 @@ def test_retry_dynamic_replica(tmp_path: Path):
     runner = Runner.load(str(d))
     W_cls = runner.node_classes["w"]
 
-    events: list[WorkflowJobEvent] = []
+    events: list[JobEvent] = []
 
     async def drive():
         first = True

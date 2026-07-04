@@ -13,15 +13,16 @@
 | 特性 | 说明 |
 | --- | --- |
 | DAG 拓扑执行 | 目录约定声明,Kahn 无环校验,就绪节点按拓扑推进 |
-| 并行副本 | 一个 step 声明 N 个并行副本(扇出/扇入),`asyncio.gather` 并行 |
+| 并行副本 | 一个 node 声明 N 个并行副本(扇出/扇入),`asyncio.gather` 并行 |
 | 同层依次启动 | `serial` 集合同层按 `nodes` 顺序启动,用于 fallback 兜底链 |
 | 接手 / 脱手确认 | `accept` False → skip;`deliver` 失败 → error(契约式设计) |
 | skip 兜底链 | 上游有产物则 skip 当前,无产物则当前接手兜底 |
 | 人机协作 | `checkpoint=AFTER` 暂停 job,等 `c` / `r` / `a` 控制 |
 | retry 复用上游 | 已完成且无依赖变更的上游 artifact 复用,不重跑 |
 | 定点续跑 | `run --out DIR --from NODE` 复用上游产物,只重跑指定节点及下游 |
+| 按层续跑 | `run --out DIR --from-depth N` 重跑 depth>=N 的所有节点,上游 depth<N 复用 |
 | 单节点调试 | `--node worker#2` 只跑指定节点及其必需上游 |
-| 统一事件流 | `WorkflowJobEvent` 折叠成 `JobState` 供视图消费 |
+| 统一事件流 | `JobEvent` 折叠成 `JobState` 供视图消费 |
 | 库 + CLI 双入口 | `async for event in runner.run()` 为主,CLI 调试 |
 | 启动预检 | `pass_check` 在 `runner.run()` 前聚合检查,失败带 `fix` 修复指引 |
 
@@ -54,6 +55,7 @@ python my_skill/scripts/run.py
 easyflow run ./my_flow
 easyflow run ./my_flow --out ./runs/a
 easyflow run ./my_flow --out ./runs/a --from translate
+easyflow run ./my_flow --out ./runs/a --from-depth 2
 easyflow debug ./my_flow
 easyflow view ./my_flow
 ```
@@ -102,10 +104,24 @@ class Fetch(Node):
 
 ## 文档
 
-- [CHANGELOG.md](CHANGELOG.md) — 版本变化与已知限制
+教程（怎么用）：
+
 - [docs/quickstart.md](docs/quickstart.md) — 快速上手与第一个 flow
 - [docs/artifacts.md](docs/artifacts.md) — output_dir、artifact.json、--out、--from
-- [docs/semantics.md](docs/semantics.md) — 关键语义、静态 replicas vs 动态 FanOut、动态扇出限制
-- [docs/pass_check.md](docs/pass_check.md) — 启动预检
-- [docs/events.md](docs/events.md) — 事件协议
 - [docs/debug.md](docs/debug.md) — debug/view 调试模式
+- [docs/pass_check.md](docs/pass_check.md) — 启动预检
+
+参考手册（按类组织）：
+
+- [docs/ref/README.md](docs/ref/README.md) — 参考手册导览
+- [docs/ref/Node.md](docs/ref/Node.md) — 节点基类
+- [docs/ref/FlowDefine.md](docs/ref/FlowDefine.md) — `@flow` / `edge` / FlowDefine
+- [docs/ref/Runner.md](docs/ref/Runner.md) — 执行器
+- [docs/ref/JobEvent.md](docs/ref/JobEvent.md) — 事件流
+- [docs/ref/JobState.md](docs/ref/JobState.md) — 状态折叠
+- 其余类见 [docs/ref/](docs/ref/)
+
+其他：
+
+- [CHANGELOG.md](CHANGELOG.md) — 版本变化与已知限制
+- [docs/how_to_release.md](docs/how_to_release.md) — 发布流程
