@@ -2,7 +2,7 @@
 
 ## 模块
 
-`easyflow.node` — `from easyflow import FanOut`
+`esflow.node` — `from esflow import FanOut`
 
 ## 职责
 
@@ -39,7 +39,7 @@ class FanOut:
 声明 flow 时把 `worker` 放进 `dynamic` 集合（loader 不预实例化）：
 
 ```python
-from easyflow import flow, edge
+from esflow import flow, edge
 
 @flow(id="dyn")
 class DynFlow:
@@ -55,7 +55,7 @@ class DynFlow:
 `split` 节点返回 `FanOut`：
 
 ```python
-from easyflow import Node, FanOut
+from esflow import Node, FanOut
 
 
 class Split(Node):
@@ -70,7 +70,7 @@ class Worker(Node):
     id = "worker"
 
     def run(self, ctx) -> dict:
-        task = ctx.fanout_payload        # 框架注入第 i 份任务
+        task = self.fanout_payload       # 框架注入第 i 份任务
         return {"result": do(task)}
 
 
@@ -98,7 +98,6 @@ class Merge(Node):
 ## 相关
 
 - [`Node`](Node.md#run) — `run` 返回 `FanOut` 触发扇出
-- [`DepthScope.fanout_payload`](DepthScope.md#fanout_payload) — 副本取载荷
 - [`DepthScope.gather`](DepthScope.md#gather) — 扇入节点收集副本产物
 - [`FlowDefine.dynamic`](FlowDefine.md#dynamic) — 声明动态扇出 base
-- [`Runner`](Runner.md) — `_expand_fanout` 实现动态扩图
+- [`Runner`](Runner.md) — 动态扩图的宿主,内部实现

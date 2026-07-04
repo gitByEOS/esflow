@@ -17,11 +17,11 @@
 
 跑:
     python examples/ocr_flow/run.py        # 含预检的完整 skill 入口
-    easyflow run examples/ocr_flow         # 跳过预检直接跑(CLI 调试用)
-    easyflow view examples/ocr_flow        # Web 调试界面
+    esflow run examples/ocr_flow         # 跳过预检直接跑(CLI 调试用)
+    esflow view examples/ocr_flow        # Web 调试界面
 """
 
-from easyflow import flow, edge
+from esflow import flow, edge
 
 
 @flow(id="ocr_flow", title="图片 OCR 流程")

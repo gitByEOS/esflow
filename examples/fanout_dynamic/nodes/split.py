@@ -1,6 +1,6 @@
 """split 节点:按章节 FanOut 展开 worker 副本,每章一个并行翻译。"""
 
-from easyflow import Node, FanOut
+from esflow import Node, FanOut
 
 
 class Split(Node):

@@ -1,6 +1,6 @@
 """fetch 节点:模拟抓取数据。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Fetch(Node):

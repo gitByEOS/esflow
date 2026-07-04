@@ -2,7 +2,7 @@
 
 ## 模块
 
-`easyflow.state` — `from easyflow import JobState, RunState, NodeStatus, apply_event`
+`esflow.state` — `from esflow import JobState, RunState, NodeStatus, apply_event`
 
 ## 职责
 
@@ -86,7 +86,7 @@ def apply_event(state: JobState, event: JobEvent) -> JobState
 通常不直接调用，由 [`Runner`](Runner.md) 内部维护。需要自己消费事件流时：
 
 ```python
-from easyflow import Runner, JobState, apply_event
+from esflow import Runner, JobState, apply_event
 
 runner = Runner.load("./my_flow")
 state = runner.state          # runner 已在跑过程中维护同一份 state

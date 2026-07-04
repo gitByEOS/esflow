@@ -1,6 +1,6 @@
 """review 节点:人工复核,run 后暂停等确认(checkpoint AFTER)。"""
 
-from easyflow import Node, Checkpoint
+from esflow import Node, Checkpoint
 
 
 class Review(Node):

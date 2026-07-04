@@ -3,7 +3,7 @@
 按 r = 验收通过,老师离场;e = 退回重做(从 review 重跑);a = 中止考试。
 """
 
-from easyflow import Node, Checkpoint
+from esflow import Node, Checkpoint
 
 
 class Review(Node):

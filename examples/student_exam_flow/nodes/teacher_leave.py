@@ -1,6 +1,6 @@
 """teacher_leave 节点:全部验收完毕,老师离场。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class TeacherLeave(Node):

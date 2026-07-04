@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-import easyflow.runner as runner_mod
-from easyflow import Runner, Checkpoint
-from easyflow.event import JobEvent
-from easyflow.loader import load_flow, FlowLoadError
+import esflow.runner as runner_mod
+from esflow import Runner, Checkpoint
+from esflow.event import JobEvent
+from esflow.loader import load_flow, FlowLoadError
 
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
@@ -238,7 +238,7 @@ def test_node_error_propagates(tmp_path: Path):
     flow_dir = tmp_path / "bad"
     (flow_dir / "nodes").mkdir(parents=True)
     (flow_dir / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='bad')\n"
         "class F:\n"
         "    nodes=['boom']\n"
@@ -246,7 +246,7 @@ def test_node_error_propagates(tmp_path: Path):
         encoding="utf-8",
     )
     (flow_dir / "nodes" / "boom.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Boom(Node):\n"
         "    id='boom'\n"
         "    def run(self, ctx):\n"
@@ -263,7 +263,7 @@ def test_cycle_detected(tmp_path: Path):
     flow_dir = tmp_path / "cyc"
     (flow_dir / "nodes").mkdir(parents=True)
     (flow_dir / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='cyc')\n"
         "class F:\n"
         "    nodes=['a','b']\n"
@@ -272,7 +272,7 @@ def test_cycle_detected(tmp_path: Path):
     )
     for n in ("a", "b"):
         (flow_dir / "nodes" / f"{n}.py").write_text(
-            f"from easyflow import Node\n"
+            f"from esflow import Node\n"
             f"class N(Node):\n"
             f"    id='{n}'\n"
             f"    def run(self, ctx): return {{}}\n",

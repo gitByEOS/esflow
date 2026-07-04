@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from easyflow import Runner
-from easyflow.event import JobEvent
+from esflow import Runner
+from esflow.event import JobEvent
 
 
 SKIP = Path(__file__).resolve().parent.parent / "examples" / "skip_flow"
@@ -82,7 +82,7 @@ def test_skip_flow_worker_b_fallback_when_a_empty(tmp_path: Path):
     d = tmp_path / "fallback"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='fallback')\n"
         "class F:\n"
         "    nodes=['decide','worker_a','worker_b','merge']\n"
@@ -92,14 +92,14 @@ def test_skip_flow_worker_b_fallback_when_a_empty(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "decide.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Decide(Node):\n"
         "    id='decide'\n"
         "    def run(self, ctx): return {'input': 'x'}\n",
         encoding="utf-8",
     )
     (d / "nodes" / "worker_a.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class WorkerA(Node):\n"
         "    id='worker_a'\n"
         "    def accept(self, ctx): return True\n"
@@ -107,7 +107,7 @@ def test_skip_flow_worker_b_fallback_when_a_empty(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "worker_b.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class WorkerB(Node):\n"
         "    id='worker_b'\n"
         "    def accept(self, ctx): return not bool(ctx.get('worker_a').get('result'))\n"
@@ -115,7 +115,7 @@ def test_skip_flow_worker_b_fallback_when_a_empty(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "merge.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Merge(Node):\n"
         "    id='merge'\n"
         "    def run(self, ctx):\n"

@@ -1,11 +1,11 @@
 """quickstart_flow:4 节点线性 DAG,review 带 checkpoint。
 
 跑:
-    easyflow run examples/quickstart_flow
-    easyflow view examples/quickstart_flow
+    esflow run examples/quickstart_flow
+    esflow view examples/quickstart_flow
 """
 
-from easyflow import flow, edge
+from esflow import flow, edge
 
 
 @flow(id="quickstart_flow", title="演示流程")

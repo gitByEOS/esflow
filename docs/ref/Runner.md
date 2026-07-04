@@ -2,7 +2,7 @@
 
 ## 模块
 
-`easyflow.runner` — `from easyflow import Runner`
+`esflow.runner` — `from esflow import Runner`
 
 ## 职责
 
@@ -47,11 +47,11 @@ class Runner:
 
 ### job_dir 推导
 
-| 模式 | job_dir |
-|---|---|
-| 默认 run | `output_root/<flow_id>/<job_id>/` |
-| `--out DIR` | `DIR/`（无 job_id 层） |
-| debug | `DEBUG_OUTPUT_ROOT/<flow_id>/`（固定，累积复用） |
+| 模式 | job_dir | 节点产物子路径 |
+|---|---|---|
+| 默认 run | `output_root/<flow_id>/<job_id>/` | `<run_id>/artifact.json`(仅内存,不落盘) |
+| `--out DIR` | `DIR/`(无 job_id 层) | `<run_id>/artifact.json`(落盘) |
+| debug | `DEBUG_OUTPUT_ROOT/<flow_id>/`(固定，累积复用) | `<run_id>/artifact.json`(落盘) |
 
 ## 构造方法
 
@@ -69,16 +69,21 @@ runner = Runner.load("./my_flow", job_dir=Path("./runs/a"))
 
 ### `run(only=None, break_before=None, nodes=None, from_node=None, from_depth=None) -> AsyncGenerator[JobEvent]`
 
-执行 flow，产出事件流。五个互斥入参（优先级 `from_node > from_depth > nodes > only > 默认`）决定跑哪些节点与加载策略。
+执行 flow，产出事件流。`run` 接 5 个参数，分两类：
 
-| 参数 | 行为 | 加载策略 |
-|---|---|---|
-| 默认 | 全跑 | `load_all`：加载已有产物，跳过已完成节点；`--out` 显式指定时 `invalidate_all`：清空重跑 |
-| `only={"X"}` | 跑 X 及其必需上游 | `load_all`：跑必需闭包 |
-| `nodes={"X"}` | 只跑 X 本身，上游必须已完成 | `load_skip_target`：加载但跳过 target |
-| `from_node="X"` | 重跑 X 及其下游，上游复用 | `load_skip_target_then_invalidate` |
-| `from_depth=N` | 重跑 `depth >= N` 的所有节点，上游 `depth < N` 复用 | `load_skip_target_then_invalidate` |
-| `break_before={"X"}` | X 就绪后不立即执行，emit `checkpoint` 暂停等 `resume` | —— |
+- **目标参数 4 个，互斥**（优先级 `from_node > from_depth > nodes > only`）：决定跑哪些节点 + 如何处理已有产物
+- **修饰参数 1 个**：`break_before`，可与任意目标参数组合，在指定节点就绪后暂停等 `resume`
+
+| 目标参数 | CLI flag | 典型场景 | 行为 | 加载策略（用户视角） |
+|---|---|---|---|---|
+| 默认 | 无 | 全跑看结果 | 全跑 | 默认 run 无持久化,全跑;`--out` 显式指定时清空重跑 |
+| `only={"X"}` | `run --node X` | run 模式无持久化,临时跑必需闭包 | 跑 X 及其必需上游 | 全量加载，跑必需闭包（无持久化场景用） |
+| `nodes={"X"}` | `debug --node X` | debug 模式上游已落产物,只重跑 X 本身 | 只跑 X 本身，上游必须已完成 | 加载已有产物，但跳过 X 强制重跑（单点调试） |
+| `from_node="X"` | `run --from X` | 改了 X,从 X 续跑到末端 | 重跑 X 及其下游，上游复用 | 加载已有产物跳过 X 及下游，再清掉 X 及下游重跑 |
+| `from_depth=N` | `run --from-depth N` | 改了 depth>=N 的节点,按层续跑 | 重跑 `depth >= N` 的所有节点，上游 `depth < N` 复用 | 加载已有产物跳过 `depth>=N`，再清掉这些节点重跑 |
+| `break_before={"X"}` | （库式独有,`debug --node` 内部已含） | 调试时在 X 前暂停观察上游产物 | X 就绪后不立即执行，emit `checkpoint` 暂停等 `resume` | —— |
+
+CLI flag 与库式的完整对照（含 `--out`/`--clear`/`view`/`new`）见 [cli.md](../cli.md)。
 
 ```python
 runner = Runner.load("./my_flow")
@@ -138,7 +143,7 @@ debug 模式：清空 `job_dir` 下持久化产物，下次 run 从头跑。非 
 
 ### `missing_upstream(nodes: set[str]) -> list[str]`
 
-返回 `nodes` 节点的所有上游中磁盘无 `artifact.json` 的节点 id 列表。单调试预检用，CLI 在 `--node` / `--from` / `--from-depth` 前调用，缺失时提前失败并提示先全跑落产物。`nodes` 接 `set`，单值续跑时传 `{from_node}`，按层续跑时传 `runner._target_by_depth(N)`。
+返回 `nodes` 节点的所有上游中磁盘无 `artifact.json` 的节点 id 列表。单调试预检用，CLI 在 `--node` / `--from` / `--from-depth` 前调用，缺失时提前失败并提示先全跑落产物。`nodes` 接 `set`，单值续跑时传 `{from_node}`，按层续跑由 CLI `--from-depth N` 内部处理（库式调用 `run(from_depth=N)` 即可，无需手算 target 集合）。
 
 ### `max_depth` (property)
 
@@ -156,20 +161,20 @@ debug 模式：清空 `job_dir` 下持久化产物，下次 run 从头跑。非 
 
 ### 产物持久化
 
-`debug` 或 `--out` 模式下，每节点 done/skipped 后把 `run` 返回值序列化到 `job_dir/<run_id>/artifact.json`。下次启动时加载复用，已完成节点被 `_ready_nodes` 自然跳过。
+持久化模式(`debug` 或 `--out`)下，每节点 done/skipped 后把 `run` 返回值序列化到 `job_dir/<run_id>/artifact.json`。下次启动时加载复用，已完成节点被自然跳过。
 
-详见 [../artifacts.md](../artifacts.md)。
+**默认 run 模式不持久化**——`artifact.json` 不落盘，产物仅在内存中流转，每次 `job_id` 新生成，无残留产物可复用。详见 [../artifacts.md](../artifacts.md)。
 
 ### 动态扩图
 
-节点 `run` 返回 [`FanOut`](FanOut.md) 时，`_expand_fanout` 创建 N 个副本实例、注入 `fanout_payload`/`depth`/`output_dir`，改写边（移除原 base 边，加 `上游→副本`/`副本→下游`），重建邻接表。
+节点 `run` 返回 [`FanOut`](FanOut.md) 时，框架创建 N 个副本实例、注入 `fanout_payload`/`depth`/`output_dir`，改写边（移除原 base 边，加 `上游→副本`/`副本→下游`），重建邻接表。
 
 ## 模块级常量
 
 | 常量 | 值 | 用途 |
 |---|---|---|
-| `DEFAULT_OUTPUT_ROOT` | `Path("/tmp/easyflow/outputs")` | 默认产物根目录 |
-| `DEBUG_OUTPUT_ROOT` | `Path("/tmp/easyflow/debug")` | debug 模式产物根目录（固定，持久化复用） |
+| `DEFAULT_OUTPUT_ROOT` | `Path("/tmp/esflow/outputs")` | 默认产物根目录 |
+| `DEBUG_OUTPUT_ROOT` | `Path("/tmp/esflow/debug")` | debug 模式产物根目录（固定，持久化复用） |
 
 ## 相关
 

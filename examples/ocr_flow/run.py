@@ -13,8 +13,8 @@ import os
 import sys
 from pathlib import Path
 
-from easyflow import Runner, easyflow_event
-from easyflow.check import CheckResult, FlowCheckError, pass_check
+from esflow import Runner, esflow_event
+from esflow.check import CheckResult, FlowCheckError, pass_check
 
 OCR_BASE = os.environ.get("OCR_BASE", "http://localhost:11434")
 
@@ -59,7 +59,7 @@ async def main() -> int:
 
     runner = Runner.load(str(Path(__file__).parent))
     async for event in runner.run():
-        easyflow_event(event)
+        esflow_event(event)
     return 0 if runner.state.status != "error" else 1
 
 

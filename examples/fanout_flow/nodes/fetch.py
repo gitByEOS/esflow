@@ -1,6 +1,6 @@
 """fetch 节点:产出 10 道题(模拟抓取任务列表)。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Fetch(Node):

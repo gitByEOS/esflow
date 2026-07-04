@@ -37,8 +37,8 @@ from .loader import load_flow
 from .state import JobState, JobStatus, RunState, NodeStatus, apply_event
 from .node import Checkpoint, FanOut, Node, DepthScope, _instantiate
 
-DEFAULT_OUTPUT_ROOT = Path("/tmp/easyflow/outputs")
-DEBUG_OUTPUT_ROOT = Path("/tmp/easyflow/debug")
+DEFAULT_OUTPUT_ROOT = Path("/tmp/esflow/outputs")
+DEBUG_OUTPUT_ROOT = Path("/tmp/esflow/debug")
 _ARTIFACT_FILE = "artifact.json"
 
 
@@ -113,21 +113,20 @@ def _parse_run_args(
 
 
 class _Ctx:
-    """运行时 DepthScope 实现:取上游 artifact + 动态扇出 payload/gather + 同层/跨层 layer。
+    """运行时 DepthScope 实现:取上游 artifact + 动态扇出 gather + 同层/跨层 layer。
 
-    同 depth 的所有副本共享同一份 _artifacts / _depths(全局引用),
-    只有 fanout_payload 是 per-run 私有。ctx 表达的是 depth 作用域,不是节点私有上下文。
+    同 depth 的所有副本共享同一份 _artifacts / _depths(全局引用),没有 per-run
+    私有状态。ctx 表达的是 depth 作用域,不是节点私有上下文。副本私有数据
+    (动态扇出载荷)通过 Node.fanout_payload 访问,不进 ctx。
     """
 
     def __init__(
         self,
         artifacts: dict[str, Any],
         depths: dict[str, int],
-        fanout_payload: Any = None,
     ) -> None:
         self._artifacts = artifacts
         self._depths = depths
-        self.fanout_payload = fanout_payload
 
     def get(self, upstream_id: str) -> Any:
         if upstream_id not in self._artifacts:
@@ -428,10 +427,7 @@ class Runner:
         node.output_dir = self.job_dir / rid
         await queue.put(trace(rid, "queued", f"就绪:{node.title or node.id}"))
         await queue.put(trace(rid, "running", f"开始:{node.title or node.id}"))
-        ctx = _Ctx(
-            self.artifacts, depths=self._depths,
-            fanout_payload=getattr(node, "fanout_payload", None),
-        )
+        ctx = _Ctx(self.artifacts, depths=self._depths)
 
         # 接手确认:返回 False 表示不接手,跳过本节点(artifact 置 None,下游可推进)
         try:
@@ -508,8 +504,8 @@ class Runner:
                 if st:
                     st.status = NodeStatus.IDLE
                     st.artifact = None
-                # debug 模式:清磁盘 artifact.json,防止下次启动加载到旧产物
-                if self.debug:
+                # 持久化模式(debug / --out):清磁盘 artifact.json,防止下次启动加载到旧产物
+                if self._persist_artifacts:
                     art_file = self.job_dir / s2 / _ARTIFACT_FILE
                     art_file.unlink(missing_ok=True)
             self.state.status = JobStatus.RUNNING

@@ -1,6 +1,6 @@
 """merge 节点:用 ctx.gather 收集各章译文,按 index 排序合并成完整译本。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Merge(Node):

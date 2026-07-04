@@ -1,6 +1,6 @@
 """merge 节点:汇总所有 worker 副本的结果。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Merge(Node):

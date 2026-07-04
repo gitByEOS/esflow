@@ -6,7 +6,7 @@ accept 检查同层前序产物:任一已有有效 raw.txt 则 skip,否则接手
 
 from pathlib import Path
 
-from easyflow import Node
+from esflow import Node
 
 
 class FetchFromWechat(Node):

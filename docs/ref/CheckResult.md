@@ -2,7 +2,7 @@
 
 ## 模块
 
-`easyflow.check` — `from easyflow.check import pass_check, CheckResult, FlowCheckError`
+`esflow.check` — `from esflow.check import pass_check, CheckResult, FlowCheckError`
 
 ## 职责
 
@@ -45,8 +45,8 @@ def pass_check(*checks: Callable[[], object]) -> None
 ### 用法
 
 ```python
-from easyflow import Runner, easyflow_event
-from easyflow.check import pass_check, CheckResult, FlowCheckError
+from esflow import Runner, esflow_event
+from esflow.check import pass_check, CheckResult, FlowCheckError
 
 
 def check_image_lib() -> CheckResult | None:
@@ -80,7 +80,7 @@ async def main():
         return 1
     runner = Runner.load(str(Path(__file__).parent))
     async for event in runner.run():
-        easyflow_event(event)
+        esflow_event(event)
 ```
 
 ### 失败输出

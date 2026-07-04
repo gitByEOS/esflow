@@ -1,4 +1,4 @@
-"""支持 python -m easyflow 调用 CLI。"""
+"""支持 python -m esflow 调用 CLI。"""
 
 import sys
 

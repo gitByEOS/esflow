@@ -1,8 +1,8 @@
-"""easyflow:轻量 Python DAG workflow 框架。
+"""esflow:轻量 Python DAG workflow 框架。
 
 主用法(库式):
 
-    from easyflow import Runner, Node, DepthScope, Checkpoint
+    from esflow import Runner, Node, DepthScope, Checkpoint
 
     runner = Runner.load("./my_flow")
     async for event in runner.run():
@@ -13,9 +13,9 @@
 
 调试便捷入口:
 
-    $ easyflow run ./my_flow
-    $ easyflow run ./my_flow --node worker#2   # 单跑副本
-    $ easyflow view ./my_flow                  # Web 调试界面
+    $ esflow run ./my_flow
+    $ esflow run ./my_flow --node worker#2   # 单跑副本
+    $ esflow view ./my_flow                  # Web 调试界面
 """
 
 from .event import (
@@ -26,7 +26,7 @@ from .event import (
     final,
     error,
     end,
-    easyflow_event,
+    esflow_event,
 )
 from .node import Node, DepthScope, Checkpoint, FanOut
 from .flow import flow, edge, Edge, FlowDefine
@@ -42,7 +42,7 @@ __all__ = [
     "final",
     "error",
     "end",
-    "easyflow_event",
+    "esflow_event",
     "Node",
     "DepthScope",
     "Checkpoint",

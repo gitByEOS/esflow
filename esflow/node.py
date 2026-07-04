@@ -2,7 +2,7 @@
 
 每个节点是一个 .py 文件,文件内定义 Node 子类:
 
-    from easyflow import Node, DepthScope, Checkpoint
+    from esflow import Node, DepthScope, Checkpoint
 
     class GenSrt(Node):
         id = "gen_srt"
@@ -34,7 +34,7 @@ accept/deliver 默认返回 True,子类按需 override。
     class Worker(Node):
         id = "worker"
         def run(self, ctx) -> dict:
-            task = ctx.fanout_payload        # 框架注入第 i 份任务
+            task = self.fanout_payload       # 框架注入第 i 份任务
             return {"result": do(task)}
 
     class Merge(Node):
@@ -82,15 +82,15 @@ class DepthScope(Protocol):
     """运行时注入给 Node.run/accept 的 depth 作用域。
 
     同 depth 的所有副本共享同一份上游产物视图(_artifacts 全局引用),
-    只有 fanout_payload 是 per-run 私有。ctx 因此表达的是 depth 作用域,
-    不是单个节点的私有上下文。
+    没有 per-run 私有状态。ctx 因此表达的是 depth 作用域,不是单个节点的
+    私有上下文。副本私有数据(动态扇出载荷)通过 Node.fanout_payload 访问。
 
     ctx.get(upstream_id) 取上游节点已完成的 artifact。
     ctx.upstream_ids() 取所有已完成的上游 node id(扇入节点枚举各副本用)。
     ctx.gather(base_id) 收集某动态 base 的所有副本产物(按 index 排序)。
     ctx.layer(depth) 取该拓扑深度的所有已完成节点产物 list(按声明顺序,skip 的为 None),
         同层 fallback 用 ctx.layer(self.depth) 拿前序,跨层拿上游用 ctx.layer(self.depth - 1)。
-    动态副本额外有 ctx.fanout_payload(框架注入的第 i 份数据)。
+    动态副本额外有 self.fanout_payload(框架注入的第 i 份数据)。
     副本节点额外有 index(副本序号)和 replica_id(实例 id)。
     """
 
@@ -101,8 +101,6 @@ class DepthScope(Protocol):
     def gather(self, base_id: str) -> list[Any]: ...
 
     def layer(self, depth: int) -> list[Any]: ...
-
-    fanout_payload: Any
 
 
 class Node:

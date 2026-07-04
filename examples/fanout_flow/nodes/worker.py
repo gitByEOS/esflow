@@ -4,7 +4,7 @@
 index/replica_id 由 runner 注入实例。
 """
 
-from easyflow import Node
+from esflow import Node
 
 
 class Worker(Node):

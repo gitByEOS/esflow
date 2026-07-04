@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from easyflow import Runner
-from easyflow.event import JobEvent
-from easyflow.loader import load_flow, FlowLoadError
+from esflow import Runner
+from esflow.event import JobEvent
+from esflow.loader import load_flow, FlowLoadError
 
 
 DYN = Path(__file__).resolve().parent.parent / "examples" / "fanout_dynamic"
@@ -82,7 +82,7 @@ def test_split_accept_failure(tmp_path: Path):
     d = tmp_path / "acc"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='acc')\n"
         "class F:\n"
         "    nodes=['ing','split','w','m']\n"
@@ -91,14 +91,14 @@ def test_split_accept_failure(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "ing.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Ing(Node):\n"
         "    id='ing'\n"
         "    def run(self, ctx): return {'tasks': []}\n",
         encoding="utf-8",
     )
     (d / "nodes" / "split.py").write_text(
-        "from easyflow import Node, FanOut\n"
+        "from esflow import Node, FanOut\n"
         "class Split(Node):\n"
         "    id='split'\n"
         "    def accept(self, ctx): return bool(ctx.get('ing')['tasks'])\n"
@@ -106,14 +106,14 @@ def test_split_accept_failure(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "w.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class W(Node):\n"
         "    id='w'\n"
-        "    def run(self, ctx): return {'r': ctx.fanout_payload}\n",
+        "    def run(self, ctx): return {'r': self.fanout_payload}\n",
         encoding="utf-8",
     )
     (d / "nodes" / "m.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class M(Node):\n"
         "    id='m'\n"
         "    def run(self, ctx): return {'all': ctx.gather('w')}\n",
@@ -137,7 +137,7 @@ def test_replicas_dynamic_overlap_rejected(tmp_path: Path):
     d = tmp_path / "ovl"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='ovl')\n"
         "class F:\n"
         "    nodes=['w']\n"
@@ -147,7 +147,7 @@ def test_replicas_dynamic_overlap_rejected(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "w.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class W(Node):\n"
         "    id='w'\n"
         "    def run(self, ctx): return {}\n",
@@ -162,7 +162,7 @@ def test_dynamic_base_missing_node(tmp_path: Path):
     d = tmp_path / "miss"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='miss')\n"
         "class F:\n"
         "    nodes=['ing']\n"
@@ -171,7 +171,7 @@ def test_dynamic_base_missing_node(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "ing.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Ing(Node):\n"
         "    id='ing'\n"
         "    def run(self, ctx): return {}\n",
@@ -186,7 +186,7 @@ def test_retry_dynamic_replica(tmp_path: Path):
     d = tmp_path / "rt"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge, Checkpoint\n"
+        "from esflow import flow, edge, Checkpoint\n"
         "@flow(id='rt')\n"
         "class F:\n"
         "    nodes=['ing','split','w','m']\n"
@@ -195,31 +195,31 @@ def test_retry_dynamic_replica(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "ing.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Ing(Node):\n"
         "    id='ing'\n"
         "    def run(self, ctx): return {'t': [1, 2]}\n",
         encoding="utf-8",
     )
     (d / "nodes" / "split.py").write_text(
-        "from easyflow import Node, FanOut\n"
+        "from esflow import Node, FanOut\n"
         "class Split(Node):\n"
         "    id='split'\n"
         "    def run(self, ctx): return FanOut('w', ctx.get('ing')['t'])\n",
         encoding="utf-8",
     )
     (d / "nodes" / "w.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class W(Node):\n"
         "    id='w'\n"
         "    calls = []\n"
         "    def run(self, ctx):\n"
-        "        W.calls.append(ctx.fanout_payload)\n"
-        "        return {'r': ctx.fanout_payload}\n",
+        "        W.calls.append(self.fanout_payload)\n"
+        "        return {'r': self.fanout_payload}\n",
         encoding="utf-8",
     )
     (d / "nodes" / "m.py").write_text(
-        "from easyflow import Node, Checkpoint\n"
+        "from esflow import Node, Checkpoint\n"
         "class M(Node):\n"
         "    id='m'\n"
         "    checkpoint=Checkpoint.AFTER\n"

@@ -3,7 +3,7 @@
 按 r = 发布试卷,学生开始做题。
 """
 
-from easyflow import Node, Checkpoint
+from esflow import Node, Checkpoint
 
 
 class PublishPaper(Node):

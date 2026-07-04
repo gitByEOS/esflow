@@ -5,7 +5,7 @@
 ## 跑通内置示例
 
 ```bash
-easyflow run examples/quickstart_flow
+esflow run examples/quickstart_flow
 ```
 
 `quickstart_flow` 是首屏推荐示例,链路很短:
@@ -20,19 +20,23 @@ fetch -> process -> review -> export
 (c) continue, (r) retry, (a) abort
 ```
 
+`r` 会重跑当前节点及其下游(上游复用),详见 [ref/Checkpoint.md](ref/Checkpoint.md)。
+
 ## 生成自己的 flow
 
 ```bash
-easyflow new my_skill
+esflow new my_skill
 python my_skill/scripts/run.py
 ```
 
-生成目录:
+`esflow new` 生成的脚手架带 `run.py`,内含 `pass_check` 预检与 skill 专属配置,用 `python run.py` 跑;纯 flow 目录(无 skill 包装)直接 `esflow run <dir>` 跑,详见 [cli.md](cli.md)。
+
+生成目录(`scripts/` 那一层就是 `Runner.load` 的入口,loader 只认 `flow.py` + `nodes/` 同级):
 
 ```text
 my_skill/
   SKILL.md
-  scripts/
+  scripts/        # ← Runner.load("./my_skill/scripts")
     flow.py
     run.py
     nodes/
@@ -41,12 +45,14 @@ my_skill/
       report.py
 ```
 
+直接手写最小 flow 时,不必套 `scripts/` 这层,`flow.py` + `nodes/` 同级即可,详见 [ref/FlowLoadError.md](ref/FlowLoadError.md#目录约定)。
+
 ## 最小节点
 
 节点是 `Node` 子类,一个文件一个节点:
 
 ```python
-from easyflow import Node
+from esflow import Node
 
 
 class Fetch(Node):
@@ -62,7 +68,7 @@ class Fetch(Node):
 `flow.py` 用 `nodes` 和 `edges` 声明 DAG:
 
 ```python
-from easyflow import flow, edge
+from esflow import flow, edge
 
 
 @flow(id="my_flow", title="我的流程")
@@ -81,7 +87,7 @@ class MyFlow:
 ```python
 from pathlib import Path
 
-from easyflow import Node, Checkpoint
+from esflow import Node, Checkpoint
 
 
 class GenSrt(Node):

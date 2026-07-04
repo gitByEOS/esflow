@@ -3,11 +3,11 @@
 fetch 产出 10 道题 → 5 个 worker 副本并行各做 2 题 → merge 汇总。
 
 跑:
-    easyflow run examples/fanout_flow
-    easyflow run examples/fanout_flow --node worker#2   # 单调试第 2 个副本
+    esflow run examples/fanout_flow
+    esflow run examples/fanout_flow --node worker#2   # 单调试第 2 个副本
 """
 
-from easyflow import flow, edge
+from esflow import flow, edge
 
 
 @flow(id="fanout_flow", title="并行扇出示范")

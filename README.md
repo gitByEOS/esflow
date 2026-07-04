@@ -1,11 +1,11 @@
-# easyflow
+# esflow
 
 ## 定位
 
 - Agent Skill时代下，轻量、好用的 workflow 框架
 - 高效人机协作控制循环，支持：单步调试、流程编排、暂停确认、定点续跑
 - 清晰化团队 Skill 规范，提高资产复用率，让单节点在多 Skill 中流转
-- `easyflow` CLI 主要服务可视化和快速上手
+- `esflow` CLI 主要服务可视化和快速上手
 
 
 ## 功能一览
@@ -29,7 +29,7 @@
 ## 安装
 
 ```bash
-pip install easyflow
+pip install esflow
 ```
 
 ## 快速开始
@@ -37,13 +37,13 @@ pip install easyflow
 从仓库源码试用:
 
 ```bash
-easyflow run examples/quickstart_flow
+esflow run examples/quickstart_flow
 ```
 
 生成一个自己的 flow:
 
 ```bash
-easyflow new my_skill
+esflow new my_skill
 python my_skill/scripts/run.py
 ```
 
@@ -52,12 +52,12 @@ python my_skill/scripts/run.py
 ## 常用命令
 
 ```bash
-easyflow run ./my_flow
-easyflow run ./my_flow --out ./runs/a
-easyflow run ./my_flow --out ./runs/a --from translate
-easyflow run ./my_flow --out ./runs/a --from-depth 2
-easyflow debug ./my_flow
-easyflow view ./my_flow
+esflow run ./my_flow
+esflow run ./my_flow --out ./runs/a
+esflow run ./my_flow --out ./runs/a --from translate
+esflow run ./my_flow --out ./runs/a --from-depth 2
+esflow debug ./my_flow
+esflow view ./my_flow
 ```
 
 checkpoint 时 stdin 命令:`c` continue / `r` retry / `a` abort。
@@ -79,7 +79,7 @@ my_flow/
 
 ```python
 # nodes/fetch.py
-from easyflow import Node
+from esflow import Node
 
 class Fetch(Node):
     id = "fetch"

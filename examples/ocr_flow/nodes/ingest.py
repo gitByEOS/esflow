@@ -4,7 +4,7 @@ PIL 默认字体不支持中文,尝试常见 CJK 字体路径,找不到则回退
 图片写入框架注入的 output_dir,artifact 登记绝对路径供 view 展示与下游读取。
 """
 
-from easyflow import Node
+from esflow import Node
 
 _CJK_FONTS = [
     "/System/Library/Fonts/PingFang.ttc",            # macOS

@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-from easyflow import Node
+from esflow import Node
 
 
 class ParseToHtml(Node):

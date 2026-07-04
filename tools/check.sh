@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "[check] 编译检测..."
-log=$(python3 -m compileall -q easyflow tests examples 2>&1) || {
+log=$(python3 -m compileall -q esflow tests examples 2>&1) || {
     echo "$log"
     echo "[check] 编译失败"
     exit 1

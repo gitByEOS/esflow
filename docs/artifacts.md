@@ -26,7 +26,7 @@ class Export(Node):
 默认 run 模式下,目录形如:
 
 ```text
-/tmp/easyflow/outputs/<flow_id>/<job_id>/<run_id>/
+/tmp/esflow/outputs/<flow_id>/<job_id>/<run_id>/
 ```
 
 指定 `--out` 后,目录形如:
@@ -59,7 +59,7 @@ class Export(Node):
 `--out` 指定一次运行的完整产物目录:
 
 ```bash
-easyflow run ./my_flow --out ./runs/video-a
+esflow run ./my_flow --out ./runs/video-a
 ```
 
 这会让每个节点写入:
@@ -76,23 +76,22 @@ easyflow run ./my_flow --out ./runs/video-a
 
 ## --from
 
-人工修正某个节点产物后,从它的下一步继续跑:
+人工修正某个节点产物后,从它的下一步继续跑(`--from` 必须搭配 `--out DIR`,续跑依赖持久化产物目录):
 
 ```bash
-easyflow run ./my_flow --out ./runs/video-a --from translate
+esflow run ./my_flow --out ./runs/video-a --from translate
 ```
 
-语义:
+等价库式 `runner.run(from_node="translate")`,详见 [ref/Runner.md](ref/Runner.md#run)。语义(与 `Runner.md` 一致):
 
-- 加载 `translate` 上游节点的 `artifact.json`
-- 清理 `translate` 及所有下游节点的旧产物目录
+- 加载 `translate` 上游节点的 `artifact.json`(上游产物复用,不重跑)
+- 清掉 `translate` 及下游节点的旧产物
 - 重跑 `translate` 及下游
-- 不重跑 `translate` 的上游
 
 如果修正的是 `parse_srt` 产物,下一步是 `translate`,就执行:
 
 ```bash
-easyflow run ./video_flow --out ./runs/video-a --from translate
+esflow run ./video_flow --out ./runs/video-a --from translate
 ```
 
 ## 人工修改产物

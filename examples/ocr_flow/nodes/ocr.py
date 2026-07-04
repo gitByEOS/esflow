@@ -9,7 +9,7 @@ OCR_BASE 从环境变量读,默认 http://localhost:11434(ollama 默认端口)�
 
 import os
 
-from easyflow import Node
+from esflow import Node
 
 
 class Ocr(Node):

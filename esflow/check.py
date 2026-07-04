@@ -2,7 +2,7 @@
 
 skill 的 run.py 在 runner.run() 之前显式调用:
 
-    from easyflow import pass_check, CheckResult
+    from esflow import pass_check, CheckResult
 
     def check_port() -> str | None:
         '''返回 None=通过,返回字符串=失败原因'''

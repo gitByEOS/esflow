@@ -2,7 +2,7 @@
 
 flow.py 声明 DAG 的边、静态并行度、动态扇出 base:
 
-    from easyflow import flow, edge
+    from esflow import flow, edge
 
     # 静态副本
     @flow(id="fanout")

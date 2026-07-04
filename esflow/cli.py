@@ -1,14 +1,14 @@
-"""easyflow CLI 调试便捷入口(非核心,主用法是库式 import)。
+"""esflow CLI 调试便捷入口(非核心,主用法是库式 import)。
 
-    easyflow new my_skill                       # 生成 skill 模板(含可跑 demo flow)
-    easyflow run ./my_flow                      # 全跑,checkpoint 时 stdin 等命令
-    easyflow run ./my_flow --out ./runs/a       # 产物写入指定目录,用于后续续跑
-    easyflow run ./my_flow --out ./runs/a --from translate  # 从指定节点续跑到末端
-    easyflow run ./my_flow --out ./runs/a --from-depth 2    # 从拓扑深度 2 起续跑到末端
-    easyflow run ./my_flow --node worker#2      # 单调试指定副本及其上游
-    easyflow debug ./my_flow                    # 调试模式:产物固定到 /tmp/easyflow/debug/<flow_id>/,持久化 artifact
-    easyflow debug ./my_flow --node worker#2    # 单调试复用上游持久化产物,只跑指定节点
-    easyflow view ./my_flow                     # Web 调试界面(浏览器,SSE 实时推送)
+    esflow new my_skill                       # 生成 skill 模板(含可跑 demo flow)
+    esflow run ./my_flow                      # 全跑,checkpoint 时 stdin 等命令
+    esflow run ./my_flow --out ./runs/a       # 产物写入指定目录,用于后续续跑
+    esflow run ./my_flow --out ./runs/a --from translate  # 从指定节点续跑到末端
+    esflow run ./my_flow --out ./runs/a --from-depth 2    # 从拓扑深度 2 起续跑到末端
+    esflow run ./my_flow --node worker#2      # 单调试指定副本及其上游
+    esflow debug ./my_flow                    # 调试模式:产物固定到 /tmp/esflow/debug/<flow_id>/,持久化 artifact
+    esflow debug ./my_flow --node worker#2    # 单调试复用上游持久化产物,只跑指定节点
+    esflow view ./my_flow                     # Web 调试界面(浏览器,SSE 实时推送)
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-from .event import easyflow_event
+from .event import esflow_event
 from .runner import Runner
 from .state import JobStatus
 
@@ -47,7 +47,7 @@ async def _run_cli(
 ) -> int:
     runner = Runner.load(flow_dir, job_dir=Path(out) if out else None)
     async for event in runner.run(only=only, from_node=from_node, from_depth=from_depth):
-        easyflow_event(event)
+        esflow_event(event)
         if event.type == "checkpoint":
             print("(c) continue, (r) retry, (a) abort:", end=" ", flush=True)
             line = sys.stdin.readline().strip()
@@ -76,7 +76,7 @@ def cmd_run(args) -> int:
         if missing:
             print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
             print(
-                f"先全跑落产物:easyflow run {args.flow_dir} --out {args.out}",
+                f"先全跑落产物:esflow run {args.flow_dir} --out {args.out}",
                 file=sys.stderr,
             )
             return 1
@@ -93,7 +93,7 @@ def cmd_run(args) -> int:
         if missing:
             print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
             print(
-                f"先全跑落产物:easyflow run {args.flow_dir} --out {args.out}",
+                f"先全跑落产物:esflow run {args.flow_dir} --out {args.out}",
                 file=sys.stderr,
             )
             return 1
@@ -113,7 +113,7 @@ def cmd_debug(args) -> int:
         if missing:
             print(f"上游产物缺失:{' '.join(missing)}", file=sys.stderr)
             print(
-                f"先全跑落产物:easyflow debug {args.flow_dir}",
+                f"先全跑落产物:esflow debug {args.flow_dir}",
                 file=sys.stderr,
             )
             return 1
@@ -128,7 +128,7 @@ def cmd_view(args) -> int:
     return asyncio.run(run_html_view(args.flow_dir))
 
 
-# —— easyflow new:生成 skill 模板 ——
+# —— esflow new:生成 skill 模板 ——
 
 _SKILL_MD = """---
 name: {name}
@@ -163,7 +163,7 @@ python3 scripts/run.py
 
 _FLOW_PY = '''"""{name}:抓取 → 分析 → 报告 最小示例。"""
 
-from easyflow import flow, edge
+from esflow import flow, edge
 
 
 @flow(id="{name}", title="{title}")
@@ -177,7 +177,7 @@ class {cls}:
 
 _FETCH_PY = '''"""fetch 节点:生成一个简单 html,用 self.depth 决定标题层级。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Fetch(Node):
@@ -195,7 +195,7 @@ class Fetch(Node):
 
 _ANALYZE_PY = '''"""analyze 节点:读取上游 html,统计大小。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Analyze(Node):
@@ -216,7 +216,7 @@ class Analyze(Node):
 
 _REPORT_PY = '''"""report 节点:基于分析结果生成报告,落盘到 output_dir。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Report(Node):
@@ -246,12 +246,12 @@ import asyncio
 import sys
 from pathlib import Path
 
-from easyflow import Runner, easyflow_event
-from easyflow.check import pass_check
+from esflow import Runner, esflow_event
+from esflow.check import pass_check
 
 
 def check_python_version() -> str | None:
-    """Python >= 3.10(easyflow 用了 X | Y 类型语法)。"""
+    """Python >= 3.10(esflow 用了 X | Y 类型语法)。"""
     return None if sys.version_info >= (3, 10) else (
         f"需要 Python >= 3.10,当前 {sys.version_info.major}.{sys.version_info.minor}"
     )
@@ -261,7 +261,7 @@ async def main():
     pass_check(check_python_version)
     runner = Runner.load(str(Path(__file__).parent))
     async for event in runner.run():
-        easyflow_event(event)
+        esflow_event(event)
 
 
 if __name__ == "__main__":
@@ -314,7 +314,7 @@ def cmd_new(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="easyflow", description="轻量 DAG workflow 调试入口")
+    parser = argparse.ArgumentParser(prog="esflow", description="轻量 DAG workflow 调试入口")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_new = sub.add_parser("new", help="生成 skill 模板(含可跑 demo flow)")
@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_debug = sub.add_parser(
         "debug",
-        help="调出 view 调试界面:产物固定到 /tmp/easyflow/debug/<flow_id>/,持久化复用",
+        help="调出 view 调试界面:产物固定到 /tmp/esflow/debug/<flow_id>/,持久化复用",
     )
     p_debug.add_argument("flow_dir", help="flow 目录路径")
     p_debug.add_argument(

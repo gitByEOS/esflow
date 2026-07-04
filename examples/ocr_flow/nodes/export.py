@@ -1,6 +1,6 @@
 """export 节点:识别文本写入 output_dir/result.txt 落盘。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Export(Node):

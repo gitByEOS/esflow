@@ -1,6 +1,6 @@
 """register 节点:学生入场签到,产出学生名单。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Register(Node):

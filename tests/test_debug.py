@@ -1,7 +1,7 @@
 """debug 模式测试:产物固定目录、artifact 持久化、复用上游、retry 清磁盘。
 
 debug 与 run 的核心区别:
-- 产物落 /tmp/easyflow/debug/<flow_id>/<run_id>/,无 job_id,反复跑累积
+- 产物落 /tmp/esflow/debug/<flow_id>/<run_id>/,无 job_id,反复跑累积
 - 节点 done/skipped 后写 artifact.json,启动时加载,已完成节点跳过不重跑
 - retry 清下游磁盘 artifact.json,防止下次启动加载到旧产物
 """
@@ -12,9 +12,9 @@ import asyncio
 import json
 from pathlib import Path
 
-import easyflow.runner as runner_mod
-from easyflow import Runner
-from easyflow.event import JobEvent
+import esflow.runner as runner_mod
+from esflow import Runner
+from esflow.event import JobEvent
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
 ARTIFACT_FILE = runner_mod._ARTIFACT_FILE
@@ -53,7 +53,7 @@ def _track_runs(runner: Runner) -> list[str]:
 
 
 def _debug_root(monkeypatch, tmp_path: Path) -> Path:
-    """把 DEBUG_OUTPUT_ROOT 重定向到 tmp_path 下,避免污染 /tmp/easyflow/debug。"""
+    """把 DEBUG_OUTPUT_ROOT 重定向到 tmp_path 下,避免污染 /tmp/esflow/debug。"""
     root = tmp_path / "debug_root"
     monkeypatch.setattr(runner_mod, "DEBUG_OUTPUT_ROOT", root)
     return root
@@ -144,7 +144,7 @@ def test_debug_skipped_node_persists_none(monkeypatch, tmp_path: Path):
     flow_dir = tmp_path / "skip_flow"
     (flow_dir / "nodes").mkdir(parents=True)
     (flow_dir / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='skip_flow')\n"
         "class F:\n"
         "    nodes=['up','down']\n"
@@ -152,7 +152,7 @@ def test_debug_skipped_node_persists_none(monkeypatch, tmp_path: Path):
         encoding="utf-8",
     )
     (flow_dir / "nodes" / "up.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Up(Node):\n"
         "    id='up'\n"
         "    def accept(self, ctx): return False\n"
@@ -160,7 +160,7 @@ def test_debug_skipped_node_persists_none(monkeypatch, tmp_path: Path):
         encoding="utf-8",
     )
     (flow_dir / "nodes" / "down.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class Down(Node):\n"
         "    id='down'\n"
         "    def run(self, ctx): return {'ok': True}\n",

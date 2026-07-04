@@ -8,10 +8,10 @@
             → teacher_leave(老师离场)
 
 跑:
-    easyflow view examples/student_exam_flow
+    esflow view examples/student_exam_flow
 """
 
-from easyflow import flow, edge
+from esflow import flow, edge
 
 
 @flow(id="student_exam_flow", title="学生考试")

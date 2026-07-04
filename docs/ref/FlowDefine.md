@@ -2,7 +2,7 @@
 
 ## 模块
 
-`easyflow.flow` — `from easyflow import flow, edge, Edge, FlowDefine`
+`esflow.flow` — `from esflow import flow, edge, Edge, FlowDefine`
 
 ## 职责
 
@@ -17,7 +17,7 @@ def flow(id: str, title: str = "") -> Callable
 把带 `nodes`/`edges`/`replicas`/`dynamic`/`serial` 类属性的类转成 `FlowDefine` 实例。
 
 ```python
-from easyflow import flow, edge
+from esflow import flow, edge
 
 @flow(id="my_flow", title="我的流程")
 class MyFlow:
@@ -82,11 +82,18 @@ class FlowDefine:
 
 #### nodes
 
-base id 列表。loader 展开后变成 `{base}` ∪ `{base#i for i in range(n)}`，动态 base 保留 base id 参与无环校验。
+base id 列表。loader 展开后：普通 base 保留原 id；静态副本 base 替换为 `{base#i for i in range(n)}`（不含 base 本身，edges 中 base 由 loader 扇出/扇入展开）；动态 base 保留 base id 参与无环校验。
 
 #### edges
 
-`Edge` 列表。静态副本 base 的边在 loader 期扇出/扇入展开；动态 base 的边运行时由 [`Runner._expand_fanout`](Runner.md) 改写。
+`Edge` 列表。静态副本 base 的边在 loader 期扇出/扇入展开；动态 base 的边运行时由 runner 改写（详见 [`Runner`](Runner.md)）。
+
+展开示例(`replicas={"worker": 3}`):
+
+```text
+edge("fetch", "worker")   →  edge("fetch", "worker#0"), edge("fetch", "worker#1"), edge("fetch", "worker#2")   # 扇出
+edge("worker", "merge")   →  edge("worker#0", "merge"), edge("worker#1", "merge"), edge("worker#2", "merge")   # 扇入
+```
 
 #### replicas
 
@@ -118,11 +125,13 @@ class DynFlow:
 
 `replicas` 与 `dynamic` 不相交：同一 base 不能同时静态副本和动态扇出，loader 抛 [`FlowLoadError`](FlowLoadError.md)。
 
-#### serial
+## 调度策略：serial
 
-同层依次启动的 base 集合。同轮就绪节点中属于 `serial` 的，runner 只启动 `nodes` 声明顺序最靠前的那个，其他 serial 节点等下一轮；非 serial 节点照常并行。
+`serial` 与 `replicas`/`dynamic` 不在同一抽象层：后两者决定"有几个副本"，`serial` 决定"同层多就绪节点怎么排队启动"，是调度策略。
 
-用于 fallback 兜底链：多源抓取（ssr 失败回退 wechat，再回退 bili）。
+**作用对象是 base**:`serial = {"worker_a", "worker_b"}` 约束的是 base id。若某 base 同时声明 `replicas` + `serial`(如 `replicas={"worker": 3}` + `serial={"worker"}`),loader 展开后 `serial` 变成 `{worker#0, worker#1, worker#2}`,副本按 `index` 顺序串行启动——但通常静态副本要的是并行,不应与 `serial` 组合;`serial` 主要用于跨 base 同层兜底链。
+
+同轮就绪节点中属于 `serial` 的，runner 只启动 `nodes` 声明顺序最靠前的那个，其他 serial 节点等下一轮；非 serial 节点照常并行。用于 **fallback 兜底链**：多源抓取（ssr 失败回退 wechat，再回退 bili）。
 
 ```python
 @flow(id="fallback")
@@ -134,8 +143,64 @@ class FallbackFlow:
         edge("worker_a", "merge"),
         edge("worker_b", "merge"),
     ]
-    serial = {"worker_a", "worker_b"}
+    serial = {"worker_a", "worker_b"}   # 同层依次启动,worker_a 优先
 ```
+
+### fallback 怎么写
+
+`worker_a` 和 `worker_b` 都从 `decide` 拿输入，但 `worker_b` 只在 `worker_a` 没出活时才接手。关键点：
+
+- `worker_a.accept` 检查自己能不能干（输入是否合自己胃口）；不能干返回 `False`，框架 emit `skipped`，artifact 置 `None`
+- `worker_b.accept` 用 `ctx.layer(self.depth)` 拿同层前序，看 `worker_a` 是否被 skip；被 skip 才接手
+- `merge` 用 `ctx.upstream_ids()` 拿到实际跑成功的那个上游产物（被 skip 的为 `None`，过滤掉即可）
+
+```python
+class WorkerA(Node):
+    id = "worker_a"
+
+    def accept(self, ctx) -> bool:
+        # 输入合 ssr 口味才接手
+        return ctx.get("decide")["source"] == "ssr"
+
+    def run(self, ctx) -> dict:
+        return {"result": fetch_ssr(ctx.get("decide"))}
+
+
+class WorkerB(Node):
+    id = "worker_b"
+
+    def accept(self, ctx) -> bool:
+        # worker_a 被 skip 才接手;worker_a 成功了就不重复跑
+        prev = ctx.layer(self.depth)        # 同层前序产物,skip 的为 None
+        has_a = any(p is not None for p in prev)
+        return not has_a
+
+    def run(self, ctx) -> dict:
+        return {"result": fetch_wechat(ctx.get("decide"))}
+
+
+class Merge(Node):
+    id = "merge"
+
+    def run(self, ctx) -> dict:
+        # 只有一个 worker 跑成功,另一个被 skip 为 None,过滤掉
+        results = [ctx.get(uid) for uid in ctx.upstream_ids() if ctx.get(uid) is not None]
+        return {"final": results[0]["result"]}
+```
+
+非 fallback 场景（普通同层并行）不要用 `serial`，节点会顺序跑失去并行收益。
+
+### ctx 收集 API 选择指引
+
+示例里同时用了 `layer`/`upstream_ids`/`gather`,三者各有适用场景:
+
+| API | 适用场景 | 示例 |
+|---|---|---|
+| `ctx.gather("worker")` | 收集**同 base** 动态/静态副本的所有产物(按 index 排序) | 扇入 `merge` 收 `worker#0..N-1` 的产物 |
+| `ctx.upstream_ids()` + None 过滤 | 跨 base 兜底链,拿所有上游中实际成功的产物 | fallback `merge` 收 `worker_a` 或 `worker_b` 谁成功 |
+| `ctx.layer(self.depth)` | 拿同层前序产物(含被 skip 的 None),用于判断前序是否成功 | fallback `worker_b.accept` 看 `worker_a` 是否被 skip |
+
+不要混用:`gather` 要求副本同 base(前缀匹配 `worker#`);跨 base 用 `gather` 会取不到。
 
 ## 校验
 

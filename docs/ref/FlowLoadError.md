@@ -2,7 +2,7 @@
 
 ## 模块
 
-`easyflow.loader` — `from easyflow import FlowLoadError, load_flow`
+`esflow.loader` — `from esflow import FlowLoadError, load_flow`
 
 ## 职责
 
@@ -43,6 +43,8 @@ def load_flow(
 
 ## 目录约定
 
+最小 flow 目录(`Runner.load("./my_flow")` 加载这个):
+
 ```text
 my_flow/
   flow.py        # @flow 装饰的类,声明 nodes/edges/replicas/dynamic/serial
@@ -51,7 +53,21 @@ my_flow/
     worker.py    # 定义 Node 子类(静态 replicas 或 dynamic 由 FanOut 展开)
 ```
 
-`flow.py` 里只能有一个 `@flow`，`nodes/*.py` 每个只能有一个 `Node` 子类。
+`esflow new my_skill` 生成的脚手架多套一层 `scripts/`,并把加载入口写到 `run.py` 里:
+
+```text
+my_skill/
+  SKILL.md
+  scripts/        # ← Runner.load("./my_skill/scripts") 加载这一层
+    flow.py
+    run.py        # 调 Runner.load(str(Path(__file__).parent)) 跑起来
+    nodes/
+      fetch.py
+      analyze.py
+      report.py
+```
+
+两种布局对 loader 等价:`load_flow` 只认 `flow.py` + `nodes/` 同级,外层叫什么名字无所谓。`flow.py` 里只能有一个 `@flow`,`nodes/*.py` 每个只能有一个 `Node` 子类。
 
 ## 校验链路
 
@@ -68,7 +84,7 @@ my_flow/
 通常不直接调用，由 [`Runner.load()`](Runner.md#load) 内部使用。需要绕开 Runner 时：
 
 ```python
-from easyflow import load_flow, FlowLoadError
+from esflow import load_flow, FlowLoadError
 
 try:
     flow, runs, node_classes = load_flow("./my_flow")

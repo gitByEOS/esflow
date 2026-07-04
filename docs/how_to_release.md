@@ -13,18 +13,18 @@ bash tools/build.sh
 脚本会依次执行:
 
 1. `bash tools/check.sh`
-2. 清理旧的 `dist/`、`build/`、`easyflow.egg-info/`
+2. 清理旧的 `dist/`、`build/`、`esflow.egg-info/`
 3. 构建 sdist 和 wheel
 4. 创建临时 venv
 5. 安装 wheel
-6. 执行 `easyflow --help` 验证 CLI 可用
+6. 执行 `esflow --help` 验证 CLI 可用
 
 成功后产物在:
 
 ```text
 dist/
-  easyflow-<version>-py3-none-any.whl
-  easyflow-<version>.tar.gz
+  esflow-<version>-py3-none-any.whl
+  esflow-<version>.tar.gz
 ```
 
 ## 本地安装测试
@@ -38,10 +38,10 @@ pip install --force-reinstall dist/*.whl
 建议用干净虚拟环境验证:
 
 ```bash
-python3 -m venv /tmp/easyflow-user-test
-/tmp/easyflow-user-test/bin/pip install --force-reinstall dist/*.whl
-/tmp/easyflow-user-test/bin/easyflow new demo
-/tmp/easyflow-user-test/bin/python demo/scripts/run.py
+python3 -m venv /tmp/esflow-user-test
+/tmp/esflow-user-test/bin/pip install --force-reinstall dist/*.whl
+/tmp/esflow-user-test/bin/esflow new demo
+/tmp/esflow-user-test/bin/python demo/scripts/run.py
 ```
 
 ## 发布前检查

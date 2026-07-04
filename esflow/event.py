@@ -66,7 +66,7 @@ def end() -> JobEvent:
     return JobEvent(type="end")
 
 
-def easyflow_event(event: JobEvent) -> None:
+def esflow_event(event: JobEvent) -> None:
     """按事件类型打印一行,cli / skill run.py / view 共用的统一消费入口。
 
     checkpoint 只打印 artifact,不打印交互提示(交互由调用方自行处理)。

@@ -4,7 +4,7 @@ Pillow 在 run 内 import,确保预检先于依赖加载执行。
 产物写入 output_dir,artifact 登记绝对路径供 view 展示与下游读取。
 """
 
-from easyflow import Node
+from esflow import Node
 
 
 class Preprocess(Node):

@@ -38,7 +38,7 @@ class FlowLoadError(Exception):
 
 def _load_module(py_path: Path, pkg_name: str):
     """从文件路径加载 python 模块。"""
-    mod_name = f"_easyflow_dyn_{pkg_name}_{py_path.stem}"
+    mod_name = f"_esflow_dyn_{pkg_name}_{py_path.stem}"
     spec = importlib.util.spec_from_file_location(mod_name, py_path)
     if spec is None or spec.loader is None:
         raise FlowLoadError(f"无法加载模块:{py_path}")

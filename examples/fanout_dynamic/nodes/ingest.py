@@ -1,6 +1,6 @@
 """ingest 节点:读入原书章节(数量运行时定)。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Ingest(Node):

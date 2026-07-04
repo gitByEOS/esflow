@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-import easyflow.runner as runner_mod
-from easyflow.cli import _handle_checkpoint_command, cmd_debug, cmd_new, main
-from easyflow.runner import Runner
+import esflow.runner as runner_mod
+from esflow.cli import _handle_checkpoint_command, cmd_debug, cmd_new, main
+from esflow.runner import Runner
 
 
 OCR_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "ocr_flow"
@@ -126,7 +126,7 @@ def test_debug_node_refuses_when_upstream_missing(tmp_path: Path, monkeypatch, c
     assert rc == 1
     err = capsys.readouterr().err
     assert "上游产物缺失" in err
-    assert "easyflow debug" in err
+    assert "esflow debug" in err
 
 
 def test_run_from_requires_out(capsys) -> None:
@@ -144,7 +144,7 @@ def test_run_from_refuses_when_upstream_missing(tmp_path: Path, capsys) -> None:
     assert rc == 1
     err = capsys.readouterr().err
     assert "上游产物缺失" in err
-    assert "easyflow run" in err
+    assert "esflow run" in err
 
 
 def test_run_from_depth_requires_out(capsys) -> None:

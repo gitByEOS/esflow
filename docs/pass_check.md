@@ -3,8 +3,8 @@
 skill 的 `run.py` 在 `runner.run()` 前用 `pass_check` 跑检查函数,任一失败聚合抛 `FlowCheckError`,不启动 runner。检查函数签名 `() -> None | str | CheckResult`:`None` 通过,`str` 视为只有 `reason` 的快捷,`CheckResult` 可带 `fix` 修复指引。
 
 ```python
-from easyflow import Runner, easyflow_event
-from easyflow.check import pass_check, CheckResult, FlowCheckError
+from esflow import Runner, esflow_event
+from esflow.check import pass_check, CheckResult, FlowCheckError
 
 def check_image_lib() -> CheckResult | None:
     """Pillow 是否可用(节点放大 + 锐化依赖)。"""
@@ -34,7 +34,7 @@ async def main():
         print(exc, file=sys.stderr); return 1
     runner = Runner.load(str(Path(__file__).parent))
     async for event in runner.run():
-        easyflow_event(event)
+        esflow_event(event)
     return 0 if runner.state.status != "error" else 1
 ```
 

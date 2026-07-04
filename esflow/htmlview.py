@@ -1,6 +1,6 @@
 """纯标准库 HTML 调试界面。
 
-    easyflow view ./my_flow
+    esflow view ./my_flow
 
 启动后开浏览器看:
 - 上:DAG 拓扑图,节点按状态着色(● idle 灰 / running 黄 / paused 蓝 / done 绿 / error 红)
@@ -190,7 +190,7 @@ _HTML = textwrap.dedent("""\
 <html lang="zh">
 <head>
 <meta charset="utf-8">
-<title>easyflow view</title>
+<title>esflow view</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -296,7 +296,7 @@ _HTML = textwrap.dedent("""\
 <body>
 <div id="toast"></div>
 <header>
-  <h1>easyflow <span class="dot">·</span> <span id="flow-id">-</span></h1>
+  <h1>esflow <span class="dot">·</span> <span id="flow-id">-</span></h1>
   <span class="status" id="job-status">idle</span>
   <div class="controls">
     <button id="start">start</button>
@@ -554,7 +554,7 @@ async def run_html_view(
                 file=sys.stderr,
             )
             print(
-                f"先全跑落产物:easyflow debug {flow_dir}",
+                f"先全跑落产物:esflow debug {flow_dir}",
                 file=sys.stderr,
             )
             return 1
@@ -638,7 +638,7 @@ async def run_html_view(
     server = await asyncio.start_server(handle, host, port)
     url = f"http://{host}:{port}"
     mode = "debug" if debug else "run"
-    print(f"easyflow view ({mode}) → {url}")
+    print(f"esflow view ({mode}) → {url}")
     if only:
         print(f"单调试节点:{' '.join(only)}(上游自动跑完,在节点前暂停等 resume)")
     else:

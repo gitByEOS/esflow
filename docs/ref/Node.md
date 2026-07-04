@@ -2,7 +2,7 @@
 
 ## 模块
 
-`easyflow.node` — `from easyflow import Node`
+`esflow.node` — `from esflow import Node`
 
 ## 职责
 
@@ -43,8 +43,8 @@ class Node:
 | `replica_id` | `str` | loader/runner 实例化 | 运行实例 id（普通节点 = base id，副本 = `worker#2`） |
 | `index` | `int` | loader/runner 实例化 | 副本序号（非副本 = 0） |
 | `depth` | `int` | Runner 初始化 | 拓扑深度（入口 0），同层节点 depth 相同 |
-| `output_dir` | `Path` | `_run_one` | 产物目录，节点把大文件写到这里 |
-| `fanout_payload` | `Any` | `_expand_fanout` | 动态扇出载荷（仅 dynamic base 副本有） |
+| `output_dir` | `Path` | 节点就绪执行时 | 产物目录，节点把大文件写到这里 |
+| `fanout_payload` | `Any` | 动态扇出展开时 | 动态扇出载荷（仅 dynamic base 副本有） |
 
 ## 方法
 
@@ -99,24 +99,45 @@ def deliver(self, artifact) -> bool:
 
 ## 行为语义
 
-- `accept` 返回 `False` → skip：artifact 置 `None`，下游通过 `ctx.get("upstream_id")` 拿到 `None` 知道上游被跳过
-- `deliver` 返回 `False` → error：emit `error`，job 停止
+| 调用 | 返回 `False` 的后果 | 抛异常的后果 |
+|---|---|---|
+| `accept` | **skip**(合法路径):artifact 置 `None`,下游推进,emit `skipped` | error:emit `error`,job 停止 |
+| `deliver` | **error**(产物不合格):emit `error`,job 停止 | error:emit `error`,job 停止 |
+
+关键差异:**`accept` 返回 `False` 是合法跳过**(`accept`/`deliver` 返回 False 后果截然不同 —— skip vs error),用于 fallback 兜底链;**`deliver` 返回 `False` 是错误停止**,用于产物校验失败。命名"接手确认"/"脱手确认"掩盖了关键差异,写节点时要留意。
+
 - `run` 返回 `FanOut` → 不产 artifact，框架展开 N 个副本并改图（详见 [`FanOut`](FanOut.md)）
 - 同步 `run` 由框架用 `asyncio.to_thread` 包起来并行，节点不需要写 `async`
 - `checkpoint = Checkpoint.AFTER` 的节点 `run` 完成后 emit `checkpoint` 事件，整 job 暂停等 [`Runner.resume()`](Runner.md#resume) / `retry()` / `abort()`
 
 ## 副本与扇出
 
-副本节点（`replicas` 或 `FanOut` 展开）通过 `self.index` 切片，扇入节点用 `ctx.upstream_ids()` 或 `ctx.gather("worker")` 收集，详见 [`DepthScope`](DepthScope.md)。
+副本节点分两种取数据方式：
+
+**静态副本**（`replicas` 展开）——按 `self.index` 切上游 list：
 
 ```python
 class Worker(Node):
     id = "worker"
 
     def run(self, ctx) -> dict:
-        chunk = self.fanout_payload        # 动态扇出载荷
+        items = ctx.get("fetch")["items"]      # 上游产物 list
+        chunk = items[self.index]              # 静态副本按序号切自己那份
         return {"result": do(chunk)}
 ```
+
+**动态副本**（`FanOut` 展开）——按 `self.fanout_payload` 取框架注入的载荷：
+
+```python
+class Worker(Node):
+    id = "worker"
+
+    def run(self, ctx) -> dict:
+        chunk = self.fanout_payload            # 动态扇出载荷
+        return {"result": do(chunk)}
+```
+
+扇入节点用 `ctx.upstream_ids()` 或 `ctx.gather("worker")` 收集，详见 [`DepthScope`](DepthScope.md)。
 
 ## 相关
 

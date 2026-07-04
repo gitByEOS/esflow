@@ -1,6 +1,6 @@
 """trigger:产出抓取目标。小数据只返回 dict,不写文件。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Trigger(Node):

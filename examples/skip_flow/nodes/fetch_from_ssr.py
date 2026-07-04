@@ -3,7 +3,7 @@
 把 run 改成 data_file.write_text("") 即可触发 fetch_from_wechat 兜底。
 """
 
-from easyflow import Node
+from esflow import Node
 
 
 class FetchFromSsr(Node):

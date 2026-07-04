@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from easyflow import Runner
-from easyflow.event import JobEvent
-from easyflow.loader import load_flow, FlowLoadError
+from esflow import Runner
+from esflow.event import JobEvent
+from esflow.loader import load_flow, FlowLoadError
 
 
 FANOUT = Path(__file__).resolve().parent.parent / "examples" / "fanout_flow"
@@ -76,7 +76,7 @@ def test_accept_failure_emits_skip(tmp_path: Path):
     d = tmp_path / "acc"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='acc')\n"
         "class F:\n"
         "    nodes=['a','b']\n"
@@ -84,14 +84,14 @@ def test_accept_failure_emits_skip(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "a.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class A(Node):\n"
         "    id='a'\n"
         "    def run(self, ctx): return {'ok': True}\n",
         encoding="utf-8",
     )
     (d / "nodes" / "b.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class B(Node):\n"
         "    id='b'\n"
         "    def accept(self, ctx): return False\n"
@@ -118,7 +118,7 @@ def test_deliver_failure_emits_error(tmp_path: Path):
     d = tmp_path / "del"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='del')\n"
         "class F:\n"
         "    nodes=['x']\n"
@@ -126,7 +126,7 @@ def test_deliver_failure_emits_error(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "x.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class X(Node):\n"
         "    id='x'\n"
         "    def deliver(self, art): return False\n"
@@ -148,7 +148,7 @@ def test_replicas_count_invalid(tmp_path: Path):
     d = tmp_path / "bad"
     (d / "nodes").mkdir(parents=True)
     (d / "flow.py").write_text(
-        "from easyflow import flow, edge\n"
+        "from esflow import flow, edge\n"
         "@flow(id='bad')\n"
         "class F:\n"
         "    nodes=['w']\n"
@@ -157,7 +157,7 @@ def test_replicas_count_invalid(tmp_path: Path):
         encoding="utf-8",
     )
     (d / "nodes" / "w.py").write_text(
-        "from easyflow import Node\n"
+        "from esflow import Node\n"
         "class W(Node):\n"
         "    id='w'\n"
         "    def run(self, ctx): return {}\n",

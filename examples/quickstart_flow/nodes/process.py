@@ -1,6 +1,6 @@
 """process 节点:加工上游数据。"""
 
-from easyflow import Node
+from esflow import Node
 
 
 class Process(Node):
