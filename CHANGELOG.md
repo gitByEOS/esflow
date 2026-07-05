@@ -2,6 +2,27 @@
 
 本项目遵循语义化版本思路。`0.x` 阶段 API 仍可能调整,破坏性变更会在对应版本中说明。
 
+## 0.1.2
+
+### 新增功能
+
+- 全持久化:所有 flow 都落盘 `artifact.json`,所有 flow 都能 `--resume` / `from_node` / `from_depth`(默认 `/tmp/esflow/outputs` 享受系统自动清理)
+- `JobEvent` 异常透传:`exc` / `exc_type` / `as_exception()`(跨进程按 `exc_type` import 还原)
+- `JobEvent.resume_hint`
+- `Runner.to_agent_hint(event, resume_cmd=None)`
+- `Runner.run_to_break(...)` + `BreakKind`
+- `Runner.to_envelope(break_kind, break_event)`:断点 → `(exit_code, envelope)` 消灭翻译胶水
+- `Runner.load(flow_dir, node_args={...})`
+- `Node.kwargs`
+- `TO_AGENT` 节点可设 `self.output_dir`
+- 导出 `BreakKind`
+
+### 改进
+
+- `_run_resume` 切到 `run_to_break`
+- `_run_one` TO_AGENT 分支统一 deliver 校验
+- `error()` 经 `_error_from_exc` 透传 exc
+
 ## 0.1.1
 
 `Checkpoint.AFTER` 重命名为 `Checkpoint.TO_HUMAN`,新增 `Checkpoint.TO_AGENT` 支持 AI agent 介入。

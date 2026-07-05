@@ -37,7 +37,7 @@ from .node import Node, DepthScope, Checkpoint, FanOut
 from .flow import flow, edge, Edge, FlowDefine
 from .state import JobState, RunState, NodeStatus, apply_event
 from .loader import load_flow, FlowLoadError
-from .runner import Runner
+from .runner import Runner, BreakKind
 from .check import pass_check, CheckResult, FlowCheckError
 
 __all__ = [
@@ -64,6 +64,7 @@ __all__ = [
     "load_flow",
     "FlowLoadError",
     "Runner",
+    "BreakKind",
     "pass_check",
     "CheckResult",
     "FlowCheckError",

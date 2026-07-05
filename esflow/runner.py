@@ -48,6 +48,17 @@ _ARTIFACT_FILE = "artifact.json"
 _BREAK_TO_AGENT_FILE = "_break_to_agent.json"
 
 
+def _error_from_exc(run_id: str, msg: str, exc: Exception) -> JobEvent:
+    """从异常构造 error event:透传 exc 引用 + 类全名 + __dict__,as_exception() 直接还原。"""
+    return error(
+        run_id,
+        msg,
+        exc_attrs=getattr(exc, "__dict__", {}) or None,
+        exc=exc,
+        exc_type=f"{type(exc).__module__}.{type(exc).__name__}",
+    )
+
+
 def _gen_job_id() -> str:
     """时间戳 + 4 位短 hash,人眼可读且不冲突。"""
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -55,10 +66,19 @@ def _gen_job_id() -> str:
     return f"{stamp}-{suffix}"
 
 
+def _is_custom_output_dir(path: Path) -> bool:
+    """节点是否显式设置了 output_dir(非默认空 Path)。"""
+    return path is not None and path != Path()
+
+
 @dataclass
 class _ControlSignal:
     kind: str  # resume / retry / abort
     from_node: str | None = None
+
+
+# run_to_break 断点类型:end=正常结束,to_agent=TO_AGENT 检查点,error=节点抛异常
+BreakKind = Literal["end", "to_agent", "error"]
 
 
 # run() 加载策略:决定启动前如何处理 job_dir 持久化产物
@@ -84,7 +104,6 @@ def _parse_run_args(
     nodes: set[str] | None,
     from_node: str | None,
     from_depth: int | None,
-    persist_artifacts: bool,
     explicit_job_dir: bool,
     downstream: Callable[[str], set[str]],
     required: Callable[[set[str]], set[str]],
@@ -104,13 +123,9 @@ def _parse_run_args(
     if resume:
         return _RunArgs(None, break_before, "load_all")
     if from_node is not None:
-        if not persist_artifacts:
-            raise RuntimeError("from_node 需要可复用的 artifact 目录")
         target = downstream(from_node)
         return _RunArgs(target, break_before, "load_skip_target_then_invalidate")
     if from_depth is not None:
-        if not persist_artifacts:
-            raise RuntimeError("from_depth 需要可复用的 artifact 目录")
         target = target_by_depth(from_depth)
         return _RunArgs(target, break_before, "load_skip_target_then_invalidate")
     if nodes is not None:
@@ -184,6 +199,7 @@ class Runner:
         output_root: Path = DEFAULT_OUTPUT_ROOT,
         debug: bool = False,
         job_dir: Path | None = None,
+        node_args: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.flow = flow
         self.runs = runs
@@ -203,7 +219,8 @@ class Runner:
         # debug 模式:job_dir 固定(无 job_id),产物累积,artifact 持久化供单调试复用上游
         self.debug = debug
         self._explicit_job_dir = job_dir is not None
-        self._persist_artifacts = debug or self._explicit_job_dir
+        # 全持久化:所有 flow 都落盘,默认 /tmp 享受系统自动清理。
+        # 用户要长期保留就显式 --out 到持久目录。
         self.output_root = output_root
         self.job_id = _gen_job_id()
         if job_dir is not None:
@@ -219,6 +236,13 @@ class Runner:
         for rid, node in self.runs.items():
             d = self._depths.get(rid, 0)
             node.depth = d
+        # 节点入参注入:node_args = {base_id: kwargs_dict},匹配 base 与所有副本(base#i)
+        # 动态副本在 _expand_fanout 创建时从 self._node_args 继承 base 的入参
+        self._node_args: dict[str, dict[str, Any]] = node_args or {}
+        for base, kw in self._node_args.items():
+            for rid, node in self.runs.items():
+                if rid == base or rid.startswith(base + "#"):
+                    node.kwargs = dict(kw)
 
     @classmethod
     def load(
@@ -227,6 +251,7 @@ class Runner:
         output_root: Path = DEFAULT_OUTPUT_ROOT,
         debug: bool = False,
         job_dir: Path | str | None = None,
+        node_args: dict[str, dict[str, Any]] | None = None,
     ) -> "Runner":
         flow, runs, node_classes = load_flow(flow_dir)
         resolved_job_dir = Path(job_dir) if job_dir is not None else None
@@ -237,6 +262,7 @@ class Runner:
             output_root=output_root,
             debug=debug,
             job_dir=resolved_job_dir,
+            node_args=node_args,
         )
 
     def clear_debug(self) -> None:
@@ -247,8 +273,6 @@ class Runner:
 
     def missing_upstream(self, nodes: set[str]) -> list[str]:
         """返回 nodes 节点的所有上游中磁盘无 artifact.json 的节点 id 列表。"""
-        if not self._persist_artifacts:
-            return []
         needed: set[str] = set()
         frontier: set[str] = set(nodes)
         while frontier:
@@ -290,10 +314,8 @@ class Runner:
         return depth
 
     def _persist_artifact(self, rid: str, artifact: Any) -> None:
-        """持久化模式:节点 done/skipped 后把 artifact 序列化到 output_dir/artifact.json。
+        """节点 done/skipped 后把 artifact 序列化到 output_dir/artifact.json。
         Path 等非 JSON 类型用 default=str 兜底;FanOut 不持久化(动态扩图指令非产物)。"""
-        if not self._persist_artifacts:
-            return
         out = self.job_dir / rid
         out.mkdir(parents=True, exist_ok=True)
         (out / _ARTIFACT_FILE).write_text(
@@ -302,10 +324,10 @@ class Runner:
         )
 
     def _load_persisted_artifacts(self, skip: set[str] | None = None) -> None:
-        """持久化模式:启动时扫描 job_dir/<rid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
+        """启动时扫描 job_dir/<rid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
         已完成节点被 _ready_nodes 自然跳过,单调试时上游产物直接复用,不重跑。
         skip 内的节点不加载(强制重跑)——nodes 单点调试时跳过目标节点本身。"""
-        if not self._persist_artifacts or not self.job_dir.exists():
+        if not self.job_dir.exists():
             return
         skip = skip or set()
         for rid in self.runs:
@@ -333,8 +355,7 @@ class Runner:
                 st.artifact = None
                 st.detail = ""
                 st.text = ""
-            if self._persist_artifacts:
-                shutil.rmtree(self.job_dir / rid, ignore_errors=True)
+            shutil.rmtree(self.job_dir / rid, ignore_errors=True)
 
     def _break_to_agent_path(self) -> Path:
         return self.job_dir / _BREAK_TO_AGENT_FILE
@@ -386,6 +407,57 @@ class Runner:
             return json.loads(path.read_text(encoding="utf-8")).get("pending", [])
         except (OSError, json.JSONDecodeError):
             return []
+
+    @staticmethod
+    def to_agent_hint(event: JobEvent, resume_cmd: str | None = None) -> str:
+        """把 TO_AGENT checkpoint event 格式化成介入指引字符串(skill 直接印)。
+
+        event.resume_hint 由框架填好(node_dir/upstream_artifact/job_dir/node_id)。
+        resume_cmd 是 skill 自己的续跑命令模板,必须含 {job_dir} 占位符,框架填充。
+        不传 resume_cmd 则只输出节点目录与上游产物。
+        """
+        hint = event.resume_hint or {}
+        node_dir = hint.get("node_dir", "")
+        upstream = hint.get("upstream_artifact")
+        job_dir = hint.get("job_dir", "")
+        lines = [f"[to_agent] 写产物到:{node_dir}"]
+        if upstream is not None:
+            lines.append(f"[to_agent] 上游产物:{upstream}")
+        if resume_cmd:
+            if "{job_dir}" not in resume_cmd:
+                raise ValueError("resume_cmd 必须含 {job_dir} 占位符")
+            lines.append(f"[to_agent] 完成后续跑:{resume_cmd.format(job_dir=job_dir)}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def to_envelope(break_kind: BreakKind, break_event: JobEvent | None) -> tuple[int, dict[str, Any]]:
+        """把 run_to_break 的断点翻译成 (exit_code, envelope),skill 入口一行调用消灭胶水。
+
+        - end:      (0, {"status": "end"})
+        - to_agent: (2, {"status": "to_agent", "node_id":..., "resume_hint":...})
+        - error:    (1, {"status": "error", "message":..., "exc_type":..., "exc_attrs":...})
+
+        envelope 是纯 dict,skill 直接 json.dumps 输出;error 时 raise break_event.as_exception()
+        与本方法正交,由 skill 自行决定。
+        """
+        if break_kind == "end":
+            return 0, {"status": "end"}
+        if break_kind == "to_agent":
+            assert break_event is not None, "to_agent 断点必须带 break_event"
+            return 2, {
+                "status": "to_agent",
+                "node_id": break_event.run_id,
+                "resume_hint": break_event.resume_hint,
+            }
+        if break_kind == "error":
+            assert break_event is not None, "error 断点必须带 break_event"
+            return 1, {
+                "status": "error",
+                "message": break_event.message,
+                "exc_type": break_event.exc_type,
+                "exc_attrs": break_event.exc_attrs,
+            }
+        raise ValueError(f"未知 break_kind: {break_kind}")
 
     def _downstream(self, from_node: str) -> set[str]:
         """from_node 及其所有下游(含自己)。"""
@@ -471,6 +543,9 @@ class Runner:
             node = _instantiate(self.node_classes[base], rid, i, depth=base_depth)
             node.fanout_payload = fanout.payload[i]
             node.output_dir = self.job_dir / rid
+            # 继承 base 的入参(若 node_args 有)
+            if base in self._node_args:
+                node.kwargs = dict(self._node_args[base])
             self.runs[rid] = node
             self.state.runs[rid] = RunState(run_id=rid)
             self._depths[rid] = base_depth
@@ -490,8 +565,6 @@ class Runner:
     async def _run_one(self, rid: str, queue: asyncio.Queue) -> None:
         """跑单个节点:accept → run → deliver / FanOut,事件推入 queue。完成推 None。"""
         node = self.runs[rid]
-        # 注入产物目录路径(skip 节点不创建目录,accept 通过后才 mkdir)
-        node.output_dir = self.job_dir / rid
         await queue.put(trace(rid, "queued", f"就绪:{node.title or node.id}"))
         await queue.put(trace(rid, "running", f"开始:{node.title or node.id}"))
         ctx = _Ctx(self.artifacts, depths=self._depths)
@@ -499,25 +572,45 @@ class Runner:
         # TO_AGENT 节点:不调 run,产物由外部 agent 写入 output_dir
         # 首次跑(无产物文件):emit checkpoint + 设 PAUSED + 写 _break_to_agent.json,进程由主循环退出
         # --resume(有产物文件):扫文件构造 artifact + deliver 校验 + 转 DONE,跑下游
+        # TO_AGENT 也走 accept:校验前置 + 可在 accept 里设 self.output_dir 指向业务目录(work_dir),
+        # 框架尊重节点自定义 output_dir,否则 fallback 到 job_dir/rid
         if node.checkpoint == Checkpoint.TO_AGENT:
+            try:
+                ok = node.accept(ctx)
+            except Exception as exc:
+                await queue.put(_error_from_exc(
+                    rid, f"接手确认异常:{type(exc).__name__}: {exc}", exc))
+                await queue.put(None)
+                return
+            if not ok:
+                self.artifacts[rid] = None
+                self._persist_artifact(rid, None)
+                await queue.put(trace(rid, "skipped", f"跳过:{node.title or node.id}"))
+                await queue.put(None)
+                return
+            node.output_dir = (
+                node.output_dir if _is_custom_output_dir(node.output_dir)
+                else self.job_dir / rid
+            )
             node.output_dir.mkdir(parents=True, exist_ok=True)
             files = [
                 f.name for f in node.output_dir.iterdir()
                 if f.name != _ARTIFACT_FILE and not f.name.startswith(".")
             ]
-            if files:
-                artifact = {"output_dir": str(node.output_dir), "files": sorted(files)}
-                try:
-                    ok = node.deliver(artifact)
-                except Exception as exc:
-                    await queue.put(error(rid, f"to_agent deliver 异常:{type(exc).__name__}: {exc}",
-                                          getattr(exc, "__dict__", {}) or None))
-                    await queue.put(None)
-                    return
-                if not ok:
-                    await queue.put(error(rid, "to_agent deliver 校验失败:产物不合规"))
-                    await queue.put(None)
-                    return
+            artifact = {"output_dir": str(node.output_dir), "files": sorted(files)}
+            # TO_AGENT 语义:deliver 校验 agent 是否已写产物
+            # - deliver 通过 → agent 已写,转 DONE 跑下游
+            # - deliver 不通过 → agent 未写或未写完,emit checkpoint 让 agent 写(非 error)
+            # - deliver 抛异常 → error
+            # 统一走 deliver 校验,不再用 files 是否为空分支(自定义 output_dir 时目录常有业务文件)
+            try:
+                ok = node.deliver(artifact)
+            except Exception as exc:
+                await queue.put(_error_from_exc(
+                    rid, f"to_agent deliver 异常:{type(exc).__name__}: {exc}", exc))
+                await queue.put(None)
+                return
+            if ok:
                 self.artifacts[rid] = artifact
                 self._persist_artifact(rid, artifact)
                 self._clear_break_to_agent(rid)
@@ -527,7 +620,14 @@ class Runner:
                 upstream_artifacts = {uid: self.artifacts.get(uid) for uid in upstream}
                 self.state.runs[rid].status = NodeStatus.PAUSED
                 self._write_break_to_agent(rid)
-                await queue.put(checkpoint(rid, upstream_artifacts))
+                ckpt = checkpoint(rid, upstream_artifacts)
+                ckpt.resume_hint = {
+                    "node_dir": str(node.output_dir),
+                    "upstream_artifact": upstream_artifacts,
+                    "job_dir": str(self.job_dir),
+                    "node_id": rid,
+                }
+                await queue.put(ckpt)
             await queue.put(None)
             return
 
@@ -535,8 +635,8 @@ class Runner:
         try:
             ok = node.accept(ctx)
         except Exception as exc:
-            await queue.put(error(rid, f"接手确认异常:{type(exc).__name__}: {exc}",
-                                  getattr(exc, "__dict__", {}) or None))
+            await queue.put(_error_from_exc(
+                rid, f"接手确认异常:{type(exc).__name__}: {exc}", exc))
             await queue.put(None)
             return
         if not ok:
@@ -546,15 +646,18 @@ class Runner:
             await queue.put(None)
             return
 
-        # accept 通过,创建产物目录,节点自己往里写文件
+        # accept 通过,respect 节点自定义 output_dir,否则 fallback job_dir/rid,创建产物目录
+        node.output_dir = (
+            node.output_dir if _is_custom_output_dir(node.output_dir)
+            else self.job_dir / rid
+        )
         node.output_dir.mkdir(parents=True, exist_ok=True)
 
         # 执行(同步 run 用 to_thread 并行)
         try:
             result = await asyncio.to_thread(node.run, ctx)
         except Exception as exc:
-            await queue.put(error(rid, f"{type(exc).__name__}: {exc}",
-                                  getattr(exc, "__dict__", {}) or None))
+            await queue.put(_error_from_exc(rid, f"{type(exc).__name__}: {exc}", exc))
             await queue.put(None)
             return
 
@@ -572,8 +675,8 @@ class Runner:
         try:
             ok = node.deliver(result)
         except Exception as exc:
-            await queue.put(error(rid, f"脱手确认异常:{type(exc).__name__}: {exc}",
-                                  getattr(exc, "__dict__", {}) or None))
+            await queue.put(_error_from_exc(
+                rid, f"脱手确认异常:{type(exc).__name__}: {exc}", exc))
             await queue.put(None)
             return
         if not ok:
@@ -609,10 +712,9 @@ class Runner:
                 if st:
                     st.status = NodeStatus.IDLE
                     st.artifact = None
-                # 持久化模式(debug / --out):清磁盘 artifact.json,防止下次启动加载到旧产物
-                if self._persist_artifacts:
-                    art_file = self.job_dir / s2 / _ARTIFACT_FILE
-                    art_file.unlink(missing_ok=True)
+                # 清磁盘 artifact.json,防止下次启动加载到旧产物
+                art_file = self.job_dir / s2 / _ARTIFACT_FILE
+                art_file.unlink(missing_ok=True)
             self.state.status = JobStatus.RUNNING
         elif ctrl.kind == "abort":
             self._aborted = True
@@ -666,7 +768,7 @@ class Runner:
             )
         args = _parse_run_args(
             only, break_before, nodes, from_node, from_depth,
-            self._persist_artifacts, self._explicit_job_dir,
+            self._explicit_job_dir,
             self._downstream, self._required, self._target_by_depth,
             resume=resume,
         )
@@ -745,6 +847,44 @@ class Runner:
                 continue
 
     # —— 控制信号(外部在 checkpoint 时调用)——
+
+    async def run_to_break(
+        self,
+        only: set[str] | None = None,
+        break_before: set[str] | None = None,
+        nodes: set[str] | None = None,
+        from_node: str | None = None,
+        from_depth: int | None = None,
+        resume: bool = False,
+    ) -> tuple[list[JobEvent], BreakKind, JobEvent | None]:
+        """高层 API:跑到断点停下,返回 (事件列表, 断点类型, 断点 event)。
+
+        断点类型与 break_event:
+        - "end":      job 正常结束(全跑完或被 abort),break_event = end event 或 None
+        - "to_agent": TO_AGENT checkpoint,break_event = checkpoint event(含 resume_hint)
+        - "error":    节点抛异常,break_event = error event,可调 as_exception() 还原
+
+        不做任何 raise/exit 决策,skill 拿 break_kind + break_event 自己决定 envelope/退出码。
+        直接 Runner.to_agent_hint(break_event, ...) / raise break_event.as_exception(),
+        无需遍历 events 反查断点。
+        TO_HUMAN checkpoint 不算断点(等 stdin 控制信号,本方法不处理,需用 run() 自己驱动)。
+        view/debug 流式场景仍需直接 async for event in runner.run()。
+        """
+        events: list[JobEvent] = []
+        async for ev in self.run(
+            only=only, break_before=break_before, nodes=nodes,
+            from_node=from_node, from_depth=from_depth, resume=resume,
+        ):
+            events.append(ev)
+            if ev.type == "error":
+                return events, "error", ev
+            if ev.type == "checkpoint":
+                node = self.runs.get(ev.run_id)
+                if node is not None and node.checkpoint == Checkpoint.TO_AGENT:
+                    return events, "to_agent", ev
+            if ev.type == "end":
+                return events, "end", ev
+        return events, "end", None
 
     def resume(self) -> None:
         """确认继续,paused 节点转 done,跑下一轮就绪节点。"""
