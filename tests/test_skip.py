@@ -65,9 +65,12 @@ def test_skip_flow_fallback_skipped_when_first_source_succeeds():
     assert Path(runner.artifacts["parse_to_html"]["html_file"]).exists()
     assert Path(runner.artifacts["done"]["final_file"]).exists()
 
-    # 产物目录:skip 节点无目录,trigger 空目录,其余有产物文件
-    assert not (runner.job_dir / "fetch_from_wechat").exists()
-    assert not (runner.job_dir / "fetch_from_bili").exists()
+    # 产物目录:全持久化下 skip 节点也有目录(含 artifact.json=null,无产物文件),
+    # trigger 空目录,其余有产物文件
+    assert (runner.job_dir / "fetch_from_wechat" / "artifact.json").exists()
+    assert not (runner.job_dir / "fetch_from_wechat" / "raw.txt").exists()
+    assert (runner.job_dir / "fetch_from_bili" / "artifact.json").exists()
+    assert not (runner.job_dir / "fetch_from_bili" / "raw.txt").exists()
     assert (runner.job_dir / "trigger").exists()
     assert (runner.job_dir / "fetch_from_ssr" / "raw.txt").exists()
     assert (runner.job_dir / "done" / "final.html").exists()

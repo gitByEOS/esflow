@@ -141,6 +141,10 @@ class Node:
     output_dir: Path = Path()
     # 动态扇出载荷,框架注入第 i 份任务(仅 dynamic base 副本有)
     fanout_payload: Any = None
+    # 节点入参,Runner.load(node_args=...) 注入;skill 节点统一从 self.kwargs 读 CLI 参数
+    # resume 时由 skill 显式重传,框架不持久化(输入非产物,不进 artifact.json)
+    # 默认 None,_instantiate 后保证是独立 dict(避免类属性可变默认值共享陷阱)
+    kwargs: dict[str, Any] | None = None
 
     def accept(self, ctx: DepthScope) -> bool:
         """接手确认:run 前校验前置条件。返回 False → 跳过本节点(emit skipped,artifact None)。默认通过。"""
@@ -163,4 +167,5 @@ def _instantiate(
     node.replica_id = replica_id
     node.index = index
     node.depth = depth
+    node.kwargs = {}
     return node

@@ -29,6 +29,8 @@ class Export(Node):
 /tmp/esflow/outputs/<flow_id>/<job_id>/<run_id>/
 ```
 
+默认根用 `/tmp`,享受系统自动清理。要长期保留就显式 `--out` 到持久目录。
+
 指定 `--out` 后,目录形如:
 
 ```text
@@ -37,13 +39,13 @@ class Export(Node):
 
 ## artifact.json
 
-当节点 `done` 或 `skipped` 后,框架会在可持久化模式下写入:
+节点 `done` 或 `skipped` 后,框架写入:
 
 ```text
 <run_id>/artifact.json
 ```
 
-它保存的是 `run()` 返回值:
+它保存的是 `run()` 返回值(skip 节点为 `null`):
 
 ```json
 {

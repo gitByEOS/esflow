@@ -65,14 +65,9 @@ async def _run_cli(
         if event.type == "checkpoint":
             node = runner.runs.get(event.run_id)
             if node is not None and node.checkpoint == Checkpoint.TO_AGENT:
-                # TO_AGENT:打印路径 + 上游产物,退出等外部 agent
-                node_dir = runner.job_dir / event.run_id
-                print(f"[to_agent] 写产物到:{node_dir}", file=sys.stderr)
-                print(f"[to_agent] 上游产物:{event.artifact}", file=sys.stderr)
-                print(
-                    f"[to_agent] 完成后续跑:esflow run {flow_dir} --resume {runner.job_dir}",
-                    file=sys.stderr,
-                )
+                # TO_AGENT:框架已填 resume_hint,cli 拼好自己的续跑命令打印
+                resume_cmd = f"esflow run {flow_dir} --resume {{job_dir}}"
+                print(Runner.to_agent_hint(event, resume_cmd=resume_cmd), file=sys.stderr)
                 return EXIT_TO_AGENT
             # 普通 TO_HUMAN checkpoint:stdin 等人机命令
             print("(c) continue, (r) retry, (a) abort:", end=" ", flush=True)
@@ -101,22 +96,16 @@ async def _run_resume(job_dir: str) -> int:
     if not runner.has_break_to_agent():
         print(f"无待完成的 TO_AGENT 节点:{job_path}", file=sys.stderr)
         return EXIT_ERROR
-    async for event in runner.run(resume=True):
-        esflow_event(event)
-        if event.type == "checkpoint":
-            node = runner.runs.get(event.run_id)
-            if node is not None and node.checkpoint == Checkpoint.TO_AGENT:
-                node_dir = runner.job_dir / event.run_id
-                print(f"[to_agent] 仍有未完成节点,写产物到:{node_dir}", file=sys.stderr)
-                print(f"[to_agent] 上游产物:{event.artifact}", file=sys.stderr)
-                print(
-                    f"[to_agent] 完成后续跑:esflow run {flow_dir} --resume {runner.job_dir}",
-                    file=sys.stderr,
-                )
-                return EXIT_TO_AGENT
-        if event.type == "end":
-            return EXIT_END if runner.state.status != JobStatus.ERROR else EXIT_ERROR
-    return EXIT_END
+    resume_cmd = f"esflow run {flow_dir} --resume {{job_dir}}"
+    events, kind, break_event = await runner.run_to_break(resume=True)
+    for ev in events:
+        esflow_event(ev)
+    if kind == "to_agent" and break_event is not None:
+        print(Runner.to_agent_hint(break_event, resume_cmd=resume_cmd), file=sys.stderr)
+        return EXIT_TO_AGENT
+    if kind == "error" and break_event is not None:
+        return EXIT_ERROR
+    return EXIT_END if runner.state.status != JobStatus.ERROR else EXIT_ERROR
 
 
 def _lookup_flow_dir(job_dir: Path) -> str | None:
