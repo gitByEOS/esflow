@@ -1,11 +1,7 @@
 <div align="center">
   <a name="readme-top"></a>
 
-<svg width="240" height="64" viewBox="0 0 240 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="esflow">
-  <text x="120" y="48" text-anchor="middle" font-size="46" font-weight="700"
-        font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif"
-        fill="#2dd4bf">esflow</text>
-</svg>
+<img src="docs/images/logo.svg" alt="esflow" width="240" />
 
 [![][license-shield]][license-link]
 [![][pypi-shield]][pypi-link]
@@ -13,7 +9,6 @@
 [![][examples-shield]][examples-link]
 
 </div>
-<br/>
 
 ## 定位
 
