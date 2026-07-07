@@ -1,6 +1,6 @@
 # 如何打包发布
 
-本文档说明 EasyFlow 的本地打包、验证和发布流程。版本变化见 [CHANGELOG.md](../CHANGELOG.md)。
+本文档说明 esflow 的本地打包、验证和发布流程。版本变化见 [CHANGELOG.md](../CHANGELOG.md)。
 
 ## 一键打包
 

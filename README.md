@@ -1,11 +1,26 @@
-# esflow
+<div align="center">
+  <a name="readme-top"></a>
+
+<svg width="240" height="64" viewBox="0 0 240 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="esflow">
+  <text x="120" y="48" text-anchor="middle" font-size="46" font-weight="700"
+        font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif"
+        fill="#2dd4bf">esflow</text>
+</svg>
+
+[![][license-shield]][license-link]
+[![][pypi-shield]][pypi-link]
+[![][docs-shield]][docs-link]
+[![][examples-shield]][examples-link]
+
+</div>
+<br/>
 
 ## 定位
 
 - Agent Skill时代下，轻量、好用的 workflow 框架
 - 高效人机协作控制循环，支持：单步调试、流程编排、暂停确认、定点续跑
 - 清晰化团队 Skill 规范，提高资产复用率，让单节点在多 Skill 中流转
-- `esflow` CLI 主要服务可视化和快速上手
+- 以 framework 方式提供稳定服务，CLI 主要服务于开发者
 
 
 ## 功能一览
@@ -105,6 +120,7 @@ class Fetch(Node):
 | [`examples/student_exam_flow/`](examples/student_exam_flow) | `register → publish_paper → student#3 → review → teacher_leave` | 多 `checkpoint` + `replicas` 综合 |
 | [`examples/ocr_flow/`](examples/ocr_flow) | `ingest → preprocess → ocr → export` | `pass_check` 启动预检 + `output_dir` 落盘 |
 | [`examples/agent_flow/`](examples/agent_flow) | `gen_task → agent_summary → export` | `TO_AGENT` checkpoint:外部 agent 介入写产物 + `--resume` 续跑 |
+| [`examples/agent_fanout_flow/`](examples/agent_fanout_flow) | `split → review_by_subagent(动态) → report` | `FanOut` 动态扇出 multi-subagent:cursor-agent 无头并行审 git commit,载体写在节点文件里 |
 
 ## 文档
 
@@ -128,3 +144,14 @@ class Fetch(Node):
 其他：
 
 - [CHANGELOG.md](CHANGELOG.md) — 版本变化与已知限制
+
+<!-- 徽章引用 -->
+
+[license-shield]: https://img.shields.io/badge/license-MIT-blue.svg
+[license-link]: LICENSE
+[pypi-shield]: https://img.shields.io/pypi/v/esflow.svg
+[pypi-link]: https://pypi.org/project/esflow/
+[docs-shield]: https://img.shields.io/badge/docs-2dd4bf.svg
+[docs-link]: https://gitbyeos.github.io/esflow/
+[examples-shield]: https://img.shields.io/badge/更多示例-38bdf8.svg
+[examples-link]: https://github.com/gitByEOS/open-part-skills/

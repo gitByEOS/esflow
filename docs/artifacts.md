@@ -1,6 +1,6 @@
 # Artifacts
 
-EasyFlow 的续跑能力建立在一个简单契约上:节点把大文件写进 `output_dir`,再用 `artifact.json` 记录下游需要读取的结构化结果。
+esflow 的续跑能力建立在一个简单契约上:节点把大文件写进 `output_dir`,再用 `artifact.json` 记录下游需要读取的结构化结果。
 
 ## output_dir
 

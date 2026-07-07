@@ -10,5 +10,5 @@ class GenTask(Node):
     def run(self, ctx) -> dict:
         return {
             "prompt": "请把下面这段文本总结成一句话",
-            "text": "EasyFlow 是一个轻量 Python DAG workflow 框架,支持并行调度、动态扇出、人机协作控制循环",
+            "text": "esflow 是一个轻量 Python DAG workflow 框架,支持并行调度、动态扇出、人机协作控制循环",
         }
