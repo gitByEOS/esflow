@@ -48,7 +48,7 @@ pip install esflow
 从仓库源码试用:
 
 ```bash
-esflow run examples/quickstart_flow
+esflow view examples/student_exam_flow
 ```
 
 生成一个自己的 flow:
@@ -63,13 +63,13 @@ python my_skill/scripts/run.py
 ## 常用命令
 
 ```bash
-esflow run ./my_flow
-esflow run ./my_flow --out ./runs/a
-esflow run ./my_flow --out ./runs/a --from translate
-esflow run ./my_flow --out ./runs/a --from-depth 2
-esflow run --resume ./runs/a
-esflow debug ./my_flow
-esflow view ./my_flow
+esflow run ./my_flow --out ./runs/a               # 产物固定到 ./runs/a
+esflow run ./my_flow --out ./runs/a --from translate  # 复用上游产物,从 translate 重跑下游
+esflow run ./my_flow --out ./runs/a --from-depth 2    # 重跑 depth>=2 的节点,上游复用
+esflow run --resume ./runs/a                      # 续跑 TO_AGENT 中断的 job
+esflow debug ./my_flow                            # 调试模式:产物固定到 /tmp/esflow/debug/<flow_id>/,持久化复用
+esflow debug ./my_flow --node worker#2            # 单步调试:复用上游持久化产物,只跑指定节点
+esflow view ./my_flow                             # 可视化 DAG 拓扑
 ```
 
 `checkpoint=TO_HUMAN` 时 stdin 命令:`c` continue / `r` retry / `a` abort。    

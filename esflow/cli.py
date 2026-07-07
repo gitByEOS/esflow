@@ -133,7 +133,9 @@ def _lookup_flow_dir(job_dir: Path) -> str | None:
 def _record_flow_dir(job_dir: Path, flow_dir: str) -> None:
     """首次跑 --out 时记录 flow 目录绝对路径,供 --resume 找回。"""
     job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "_flow_dir.txt").write_text(flow_dir, encoding="utf-8")
+    (job_dir / "_flow_dir.txt").write_text(
+        str(Path(flow_dir).resolve()), encoding="utf-8"
+    )
 
 
 def cmd_run(args) -> int:
@@ -286,7 +288,7 @@ class Fetch(Node):
 
     def run(self, ctx) -> dict:
         level = self.depth + 1
-        html = f"<!doctype html><meta charset=utf-8><h{level}>Hello EasyFlow</h{level}>"
+        html = f"<!doctype html><meta charset=utf-8><h{level}>Hello esflow</h{level}>"
         path = str(self.output_dir / "page.html")
         with open(path, "w", encoding="utf-8") as f:
             f.write(html)
