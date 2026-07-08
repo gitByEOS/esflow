@@ -73,7 +73,7 @@ esflow view ./my_flow                             # 可视化 DAG 拓扑
 ```
 
 `checkpoint=TO_HUMAN` 时 stdin 命令:`c` continue / `r` retry / `a` abort。    
-`checkpoint=TO_AGENT` 时进程退出(exit 2),agent 读 stderr 拿上游产物,写产物文件到 `<out>/<节点>/`,再 `--resume` 续跑,详见 [docs/cli.md](docs/cli.md)。
+`checkpoint=TO_AGENT` 时进程退出(exit 2),框架往 stderr 打结构化指引(`node_dir`/上游产物/`job_dir`),agent 写产物后 `--resume` 续跑,详见 [docs/cli.md](docs/cli.md)。
 
 人工修正某个节点产物后,从它的下一步继续跑:先用 `--out` 固定产物目录,再用 `--from` 指定重跑起点。详见 [docs/artifacts.md](docs/artifacts.md)。
 
