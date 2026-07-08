@@ -45,7 +45,7 @@ runner = Runner.load("./my_flow", node_args={"resolve": {"input": "x"}})
 | `--out DIR` | `DIR/`(无 job_id 层) | 显式持久目录,不清理 |
 | debug | `DEBUG_OUTPUT_ROOT/<flow_id>/`(固定) | `/tmp/esflow/debug`,累积复用 |
 
-全持久化:所有 flow 都落盘 `artifact.json`,所有 flow 都能 `--resume` / `from_node` / `from_depth`。默认 `/tmp` 根享受自动清理,要长期保留就显式 `--out`。
+全持久化:所有 flow 都落盘 `artifact.json` 到 `job_dir/.esflow/<run_id>/`,所有 flow 都能 `--resume` / `from_node` / `from_depth`。默认 `/tmp` 根享受自动清理,要长期保留就显式 `--out`。节点业务产物落 `job_dir/<run_id>/`,框架元数据隔离到 `job_dir/.esflow/`。
 
 ## run(...)
 
@@ -110,7 +110,7 @@ checkpoint 暂停时外部调用,唤醒等待中的 `run()`:
 | 方法 | 行为 |
 |---|---|
 | `resume()` | paused 节点转 done(`TO_HUMAN`)或转 idle(`break_before`),跑下一轮 |
-| `retry(from_node)` | 清 `from_node` 及下游的 artifact 与状态,上游复用。debug 模式额外清磁盘 `artifact.json` |
+| `retry(from_node)` | 清 `from_node` 及下游的 artifact 与状态,上游复用。debug 模式额外清磁盘 `.esflow/<rid>/artifact.json` |
 | `abort()` | 中止 job,emit `error("aborted")` + `end` |
 
 ## 调试辅助
@@ -119,7 +119,7 @@ checkpoint 暂停时外部调用,唤醒等待中的 `run()`:
 |---|---|
 | `clear_debug()` | debug 模式清空 `job_dir` 下产物,下次从头跑;非 debug 无操作 |
 | `missing_upstream(nodes)` | 返回 `nodes` 上游中磁盘无 `artifact.json` 的节点 id,单调试预检用 |
-| `has_break_to_agent()` | `job_dir` 下是否有未完成的 TO_AGENT 节点 |
+| `has_break_to_agent()` | `job_dir/.esflow/` 下是否有未完成的 TO_AGENT 节点 |
 | `pending_break_to_agent()` | 返回 pending 的 TO_AGENT 节点 id 列表 |
 
 ## 执行语义
@@ -127,7 +127,7 @@ checkpoint 暂停时外部调用,唤醒等待中的 `run()`:
 - **并行**:同一轮就绪节点 `asyncio.gather`,同步 `run` 用 `asyncio.to_thread` 包
 - **拓扑深度**:`depth(node) = 1 + max(depth(upstream))`,入口 0,同层 depth 相同
 - **serial**:同轮就绪节点中属于 `serial` 的,只启动 `nodes` 顺序最靠前的那个,其他等下一轮(用于 fallback 兜底链,详见 [`FlowDefine`](FlowDefine.md))
-- **产物持久化**:全持久化,所有 flow 都落盘 `artifact.json`。默认 `/tmp` 根享受自动清理,详见 [../artifacts.md](../artifacts.md)
+- **产物持久化**:全持久化,所有 flow 都落盘 `artifact.json` 到 `.esflow/<run_id>/`。默认 `/tmp` 根享受自动清理,详见 [../artifacts.md](../artifacts.md)
 - **动态扩图**:节点 `run` 返回 [`FanOut`](FanOut.md) 时,框架创建 N 个副本、改写边、重建邻接表
 
 ## 模块常量

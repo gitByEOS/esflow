@@ -49,7 +49,7 @@ class Node:
 | `replica_id` | loader/runner 实例化 | 运行实例 id(普通节点 = base id,副本 = `worker#2`) |
 | `index` | loader/runner 实例化 | 副本序号(非副本 = 0) |
 | `depth` | Runner 初始化 | 拓扑深度(入口 0) |
-| `output_dir` | 节点就绪时 | 产物目录,默认 `Path()`,框架 fallback 到 `job_dir/<run_id>`;`TO_AGENT` 节点可在 `accept` 设为业务目录,框架尊重不覆盖 |
+| `output_dir` | 节点就绪时 | 业务产物目录,默认 `Path()`,框架 fallback 到 `job_dir/<run_id>`;只装节点业务产物,框架元数据(`artifact.json`)隔离到 `job_dir/.esflow/<run_id>/`。`TO_AGENT` 节点可在 `accept` 设为业务目录,框架尊重不覆盖 |
 | `fanout_payload` | 动态扇出展开时 | 动态扇出载荷(仅 dynamic base 副本有) |
 
 ## 方法

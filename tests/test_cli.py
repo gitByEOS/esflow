@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import esflow.htmlview as htmlview_mod
 import esflow.runner as runner_mod
 from esflow.cli import _handle_checkpoint_command, cmd_debug, cmd_new, main
 from esflow.runner import Runner
@@ -169,3 +172,57 @@ def test_run_from_and_from_depth_mutually_exclusive(tmp_path: Path) -> None:
         main(["run", str(OCR_EXAMPLE), "--out", str(tmp_path / "out"),
               "--from", "ocr", "--from-depth", "2"])
     assert exc.value.code == 2
+
+
+class _FakeRunner:
+    """最小 runner 替身:run() 立即结束(空 async gen),不卡 checkpoint。"""
+
+    def __init__(self) -> None:
+        self.state = SimpleNamespace(status="done")
+        self.debug = True
+
+    def clear_debug(self) -> None:
+        pass
+
+    def missing_upstream(self, nodes: set[str]) -> list[str]:
+        return []
+
+    def resume(self) -> None:
+        pass
+
+    def retry(self, run_id: str) -> None:
+        pass
+
+    def abort(self) -> None:
+        pass
+
+    async def run(self, nodes=None, break_before=None):
+        if False:  # pragma: no cover
+            yield
+
+
+def test_view_auto_port_when_8765_occupied(monkeypatch, tmp_path: Path, capsys) -> None:
+    """8765 被占时 run_html_view 用 port=0 让 OS 分配可用端口,不抛 OSError。"""
+    # 占住 8765
+    blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    blocker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    blocker.bind(("127.0.0.1", 8765))
+    blocker.listen(1)
+    try:
+        # 不开真浏览器,Runner 用替身让 run() 立即结束
+        monkeypatch.setattr(
+            htmlview_mod, "webbrowser", SimpleNamespace(open=lambda *a, **k: None)
+        )
+        monkeypatch.setattr(
+            htmlview_mod.Runner, "load", staticmethod(lambda *a, **k: _FakeRunner())
+        )
+
+        from esflow.htmlview import run_html_view
+
+        rc = asyncio.run(run_html_view(str(tmp_path), debug=True, only={"x"}))
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "http://127.0.0.1:" in out
+        assert "127.0.0.1:8765" not in out
+    finally:
+        blocker.close()

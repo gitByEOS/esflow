@@ -17,6 +17,7 @@ from esflow.loader import load_flow, FlowLoadError
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
 OCR_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "ocr_flow"
 ARTIFACT_FILE = runner_mod._ARTIFACT_FILE
+META_DIR = runner_mod.ESFLOW_META_DIR
 
 
 def _track_calls(runner: Runner) -> list[str]:
@@ -107,10 +108,10 @@ def test_run_from_reuses_out_dir_upstream_artifacts(tmp_path: Path):
     first_calls = _stub_ocr_flow(first)
     _collect_events(first)
     assert first_calls == ["ingest", "preprocess", "ocr", "export"]
-    assert (out_dir / "preprocess" / ARTIFACT_FILE).exists()
+    assert (out_dir / META_DIR / "preprocess" / ARTIFACT_FILE).exists()
 
     fixed_preprocess = {"image_path": "fixed.png"}
-    (out_dir / "preprocess" / ARTIFACT_FILE).write_text(
+    (out_dir / META_DIR / "preprocess" / ARTIFACT_FILE).write_text(
         json.dumps(fixed_preprocess, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -127,8 +128,8 @@ def test_run_from_reuses_out_dir_upstream_artifacts(tmp_path: Path):
     assert second.artifacts["ocr"]["text"] == "识别:fixed.png"
     assert not stale_file.exists()
 
-    ocr_artifact = json.loads((out_dir / "ocr" / ARTIFACT_FILE).read_text(encoding="utf-8"))
-    export_artifact = json.loads((out_dir / "export" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    ocr_artifact = json.loads((out_dir / META_DIR / "ocr" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    export_artifact = json.loads((out_dir / META_DIR / "export" / ARTIFACT_FILE).read_text(encoding="utf-8"))
     assert ocr_artifact["text"] == "识别:fixed.png"
     assert export_artifact["chars"] == len("识别:fixed.png")
 
@@ -144,7 +145,7 @@ def test_run_from_depth_reuses_upstream_layers(tmp_path: Path):
 
     # 人工篡改 preprocess 产物,from_depth=2 不应感知(上游复用,不重跑)
     fixed_preprocess = {"image_path": "fixed.png"}
-    (out_dir / "preprocess" / ARTIFACT_FILE).write_text(
+    (out_dir / META_DIR / "preprocess" / ARTIFACT_FILE).write_text(
         json.dumps(fixed_preprocess, ensure_ascii=False), encoding="utf-8"
     )
 
@@ -564,9 +565,9 @@ def test_to_agent_persists_upstream_under_output_root(tmp_path: Path):
     # job_dir 由框架在 output_root 下自动生成
     assert runner.job_dir.parent == jobs_root / "agent_flow"
     # 上游 fetch 产物已落盘
-    assert (runner.job_dir / "fetch" / ARTIFACT_FILE).exists()
+    assert (runner.job_dir / META_DIR / "fetch" / ARTIFACT_FILE).exists()
     fetch_art = json.loads(
-        (runner.job_dir / "fetch" / ARTIFACT_FILE).read_text(encoding="utf-8")
+        (runner.job_dir / META_DIR / "fetch" / ARTIFACT_FILE).read_text(encoding="utf-8")
     )
     assert fetch_art["text"] == "hello world"
 
@@ -636,8 +637,8 @@ def test_pure_flow_always_persists(tmp_path: Path):
     assert [e.type for e in events][-1] == "end"
     assert runner.artifacts["b"]["v"] == 2
     # 纯计算 flow 也落盘 artifact.json(全持久化)
-    assert (runner.job_dir / "a" / ARTIFACT_FILE).exists()
-    assert (runner.job_dir / "b" / ARTIFACT_FILE).exists()
+    assert (runner.job_dir / META_DIR / "a" / ARTIFACT_FILE).exists()
+    assert (runner.job_dir / META_DIR / "b" / ARTIFACT_FILE).exists()
 
 
 def test_to_agent_first_run_emits_checkpoint_and_exits(tmp_path: Path):
@@ -666,8 +667,8 @@ def test_to_agent_first_run_emits_checkpoint_and_exits(tmp_path: Path):
     assert runner.state.runs["agent_summary"].status == "paused"
     assert runner.has_break_to_agent()
     assert runner.pending_break_to_agent() == ["agent_summary"]
-    # agent_summary/artifact.json 不存在(产物由 agent 写)
-    assert not (out_dir / "agent_summary" / ARTIFACT_FILE).exists()
+    # agent_summary/.esflow/artifact.json 不存在(产物由 agent 写)
+    assert not (out_dir / META_DIR / "agent_summary" / ARTIFACT_FILE).exists()
     # fetch 已完成,export 未跑
     assert runner.state.runs["fetch"].status == "done"
     assert runner.state.runs["export"].status == "idle"
@@ -945,7 +946,7 @@ def test_node_args_not_persisted(tmp_path: Path):
     )
     _collect_events(runner)
     # artifact.json 不含 kwargs
-    art = json.loads((out_dir / "a" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    art = json.loads((out_dir / META_DIR / "a" / ARTIFACT_FILE).read_text(encoding="utf-8"))
     assert art == {"v": 42}
     assert "kwargs" not in art
 
@@ -978,8 +979,8 @@ def test_to_agent_resume_after_agent_writes_files(tmp_path: Path):
     assert second.state.runs["export"].status == "done"
     # _break_to_agent.json 被清
     assert not second.has_break_to_agent()
-    # agent_summary artifact.json 已构造
-    art = json.loads((out_dir / "agent_summary" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    # agent_summary artifact.json 已构造(框架元数据在 .esflow/)
+    art = json.loads((out_dir / META_DIR / "agent_summary" / ARTIFACT_FILE).read_text(encoding="utf-8"))
     assert art["files"] == ["summary.txt"]
     assert "output_dir" in art
     # export 拿到 agent_summary artifact

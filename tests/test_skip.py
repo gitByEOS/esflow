@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import esflow.runner as runner_mod
 from esflow import Runner
 from esflow.event import JobEvent
 
+META_DIR = runner_mod.ESFLOW_META_DIR
 
 SKIP = Path(__file__).resolve().parent.parent / "examples" / "skip_flow"
 
@@ -65,11 +67,10 @@ def test_skip_flow_fallback_skipped_when_first_source_succeeds():
     assert Path(runner.artifacts["parse_to_html"]["html_file"]).exists()
     assert Path(runner.artifacts["done"]["final_file"]).exists()
 
-    # 产物目录:全持久化下 skip 节点也有目录(含 artifact.json=null,无产物文件),
-    # trigger 空目录,其余有产物文件
-    assert (runner.job_dir / "fetch_from_wechat" / "artifact.json").exists()
+    # 全持久化下 skip 节点也持久化 artifact(在 .esflow/ 下,值为 null)
+    assert (runner.job_dir / META_DIR / "fetch_from_wechat" / "artifact.json").exists()
     assert not (runner.job_dir / "fetch_from_wechat" / "raw.txt").exists()
-    assert (runner.job_dir / "fetch_from_bili" / "artifact.json").exists()
+    assert (runner.job_dir / META_DIR / "fetch_from_bili" / "artifact.json").exists()
     assert not (runner.job_dir / "fetch_from_bili" / "raw.txt").exists()
     assert (runner.job_dir / "trigger").exists()
     assert (runner.job_dir / "fetch_from_ssr" / "raw.txt").exists()

@@ -2,6 +2,14 @@
 
 本项目遵循语义化版本思路。`0.x` 阶段 API 仍可能调整,破坏性变更会在对应版本中说明。
 
+## 0.1.3
+
+### 改进
+
+- 框架元数据隔离到 `job_dir/.esflow/{<rid>/artifact.json | break_to_agent.json | flow_dir.txt }` 从节点产物目录挪到隐藏子目录,`<job_dir>/<run_id>/` 只装节点业务产物
+- `run_html_view` 端口默认 `0`,由 OS 分配可用端口,消除固定端口 8765 被占用时 OSError 崩溃,多实例并行不冲突
+- 修复已知bug
+
 ## 0.1.2
 
 ### 新增功能

@@ -26,8 +26,9 @@ from pathlib import Path
 
 from .event import esflow_event
 from .node import Checkpoint
-from .runner import Runner
+from .runner import ESFLOW_META_DIR, Runner, _BREAK_TO_AGENT_FILE, _FLOW_DIR_FILE
 from .state import JobStatus
+from . import __version__
 
 
 # CLI 返回码:end=0,error=1,待 agent 介入=2,Ctrl+C=130
@@ -79,7 +80,7 @@ async def _run_cli(
 
 
 async def _run_resume(job_dir: str) -> int:
-    """--resume:从 _break_to_agent.json 续跑,TO_AGENT 节点扫文件构造 artifact。"""
+    """--resume:从 .esflow/break_to_agent.json 续跑,TO_AGENT 节点扫文件构造 artifact。"""
     job_path = Path(job_dir)
     if not job_path.exists():
         print(f"job 目录不存在:{job_path}", file=sys.stderr)
@@ -87,7 +88,7 @@ async def _run_resume(job_dir: str) -> int:
     # job_dir 命名约定:output_root/<flow_id>/<job_id> 或用户 --out 指定
     # flow_id 是 job_dir 的父目录名,flow_dir 未知 → 用 flow.py 反查不可行
     # 简化:--resume 要求 job_dir 是 --out 指定的扁平目录,flow_dir 通过
-    # job_dir 同目录的 _flow_dir 指针文件找回(首次跑时记录)
+    # job_dir/.esflow/flow_dir.txt 指针文件找回(首次跑时记录)
     flow_dir = _lookup_flow_dir(job_path)
     if flow_dir is None:
         print(f"找不到 flow 目录,首次跑请用 esflow run <flow> --out <path>", file=sys.stderr)
@@ -109,8 +110,8 @@ async def _run_resume(job_dir: str) -> int:
 
 
 def _lookup_flow_dir(job_dir: Path) -> str | None:
-    """从 job_dir 读 _flow_dir.txt 找回 flow 目录绝对路径。"""
-    pointer = job_dir / "_flow_dir.txt"
+    """从 job_dir/.esflow/flow_dir.txt 找回 flow 目录绝对路径。"""
+    pointer = job_dir / ESFLOW_META_DIR / _FLOW_DIR_FILE
     if not pointer.exists():
         return None
     try:
@@ -120,9 +121,10 @@ def _lookup_flow_dir(job_dir: Path) -> str | None:
 
 
 def _record_flow_dir(job_dir: Path, flow_dir: str) -> None:
-    """首次跑 --out 时记录 flow 目录绝对路径,供 --resume 找回。"""
-    job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "_flow_dir.txt").write_text(
+    """首次跑 --out 时记录 flow 目录绝对路径到 .esflow/,供 --resume 找回。"""
+    meta = job_dir / ESFLOW_META_DIR
+    meta.mkdir(parents=True, exist_ok=True)
+    (meta / _FLOW_DIR_FILE).write_text(
         str(Path(flow_dir).resolve()), encoding="utf-8"
     )
 
@@ -149,7 +151,7 @@ def cmd_run(args) -> int:
     # 防误跑:job_dir 下有未完成 TO_AGENT 节点时,要求显式 --resume
     if args.out:
         out_path = Path(args.out)
-        if out_path.exists() and (out_path / "_break_to_agent.json").exists():
+        if out_path.exists() and (out_path / ESFLOW_META_DIR / _BREAK_TO_AGENT_FILE).exists():
             print(
                 f"有未完成的 TO_AGENT 节点,先完成 agent 工作后续跑:\n"
                 f"  esflow run {args.flow_dir} --resume {out_path}",
@@ -406,6 +408,7 @@ def cmd_new(args) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="esflow", description="轻量 DAG workflow 调试入口")
+    parser.add_argument("-v", "--version", action="version", version=f"esflow {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_new = sub.add_parser("new", help="生成 skill 模板(含可跑 demo flow)")

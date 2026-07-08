@@ -531,7 +531,7 @@ def _http(resp: bytes, ctype: str = "text/html; charset=utf-8", status: int = 20
 async def run_html_view(
     flow_dir: str,
     host: str = "127.0.0.1",
-    port: int = 8765,
+    port: int = 0,
     debug: bool = False,
     only: set[str] | None = None,
     clear: bool = False,
@@ -636,7 +636,9 @@ async def run_html_view(
         writer.close()
 
     server = await asyncio.start_server(handle, host, port)
-    url = f"http://{host}:{port}"
+    # port=0 让 OS 分配可用端口,消除端口占用边界情况
+    actual_port = server.sockets[0].getsockname()[1]
+    url = f"http://{host}:{actual_port}"
     mode = "debug" if debug else "run"
     print(f"esflow view ({mode}) → {url}")
     if only:

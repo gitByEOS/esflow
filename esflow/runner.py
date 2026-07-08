@@ -44,8 +44,10 @@ from .node import Checkpoint, FanOut, Node, DepthScope, _instantiate
 
 DEFAULT_OUTPUT_ROOT = Path("/tmp/esflow/outputs")
 DEBUG_OUTPUT_ROOT = Path("/tmp/esflow/debug")
+ESFLOW_META_DIR = ".esflow"
 _ARTIFACT_FILE = "artifact.json"
-_BREAK_TO_AGENT_FILE = "_break_to_agent.json"
+_BREAK_TO_AGENT_FILE = "break_to_agent.json"
+_FLOW_DIR_FILE = "flow_dir.txt"
 
 
 def _error_from_exc(run_id: str, msg: str, exc: Exception) -> JobEvent:
@@ -265,6 +267,10 @@ class Runner:
             node_args=node_args,
         )
 
+    def _meta_path(self, *parts: str) -> Path:
+        """框架元数据根:job_dir/.esflow/ 下拼接子路径。"""
+        return self.job_dir.joinpath(ESFLOW_META_DIR, *parts)
+
     def clear_debug(self) -> None:
         """debug 模式:清空 job_dir 下持久化产物,下次 run 从头跑。非 debug 无操作。"""
         if not self.debug:
@@ -283,7 +289,7 @@ class Runner:
                     frontier.add(up)
         return [
             rid for rid in needed
-            if not (self.job_dir / rid / _ARTIFACT_FILE).exists()
+            if not self._meta_path(rid, _ARTIFACT_FILE).exists()
         ]
 
     def _rebuild_adjacency(self) -> None:
@@ -314,9 +320,9 @@ class Runner:
         return depth
 
     def _persist_artifact(self, rid: str, artifact: Any) -> None:
-        """节点 done/skipped 后把 artifact 序列化到 output_dir/artifact.json。
+        """节点 done/skipped 后把 artifact 序列化到 .esflow/<rid>/artifact.json。
         Path 等非 JSON 类型用 default=str 兜底;FanOut 不持久化(动态扩图指令非产物)。"""
-        out = self.job_dir / rid
+        out = self._meta_path(rid)
         out.mkdir(parents=True, exist_ok=True)
         (out / _ARTIFACT_FILE).write_text(
             json.dumps(artifact, ensure_ascii=False, indent=2, default=str),
@@ -324,7 +330,7 @@ class Runner:
         )
 
     def _load_persisted_artifacts(self, skip: set[str] | None = None) -> None:
-        """启动时扫描 job_dir/<rid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
+        """启动时扫描 .esflow/<rid>/artifact.json,加载到 self.artifacts 并标 done/skipped。
         已完成节点被 _ready_nodes 自然跳过,单调试时上游产物直接复用,不重跑。
         skip 内的节点不加载(强制重跑)——nodes 单点调试时跳过目标节点本身。"""
         if not self.job_dir.exists():
@@ -333,7 +339,7 @@ class Runner:
         for rid in self.runs:
             if rid in skip:
                 continue
-            art_file = self.job_dir / rid / _ARTIFACT_FILE
+            art_file = self._meta_path(rid, _ARTIFACT_FILE)
             if not art_file.exists():
                 continue
             try:
@@ -346,7 +352,7 @@ class Runner:
             st.artifact = artifact
 
     def _invalidate_runs(self, nodes: set[str]) -> None:
-        """清掉本次要重跑节点的内存状态与磁盘产物。"""
+        """清掉本次要重跑节点的内存状态与磁盘产物(框架元数据 + 业务产物)。"""
         for rid in nodes:
             self.artifacts.pop(rid, None)
             st = self.state.runs.get(rid)
@@ -355,13 +361,14 @@ class Runner:
                 st.artifact = None
                 st.detail = ""
                 st.text = ""
+            shutil.rmtree(self._meta_path(rid), ignore_errors=True)
             shutil.rmtree(self.job_dir / rid, ignore_errors=True)
 
     def _break_to_agent_path(self) -> Path:
-        return self.job_dir / _BREAK_TO_AGENT_FILE
+        return self._meta_path(_BREAK_TO_AGENT_FILE)
 
     def _write_break_to_agent(self, rid: str) -> None:
-        """首次跑到 TO_AGENT 节点:把 pending 节点 id 追加到 _break_to_agent.json。"""
+        """首次跑到 TO_AGENT 节点:把 pending 节点 id 追加到 .esflow/break_to_agent.json。"""
         path = self._break_to_agent_path()
         pending: list[str] = []
         if path.exists():
@@ -377,7 +384,7 @@ class Runner:
         )
 
     def _clear_break_to_agent(self, rid: str) -> None:
-        """--resume 完成 TO_AGENT 节点后:从 _break_to_agent.json 移除。空了删文件。"""
+        """--resume 完成 TO_AGENT 节点后:从 .esflow/break_to_agent.json 移除。空了删文件。"""
         path = self._break_to_agent_path()
         if not path.exists():
             return
@@ -399,7 +406,7 @@ class Runner:
         return self._break_to_agent_path().exists()
 
     def pending_break_to_agent(self) -> list[str]:
-        """返回 _break_to_agent.json 里 pending 的 TO_AGENT 节点 id 列表。"""
+        """返回 .esflow/break_to_agent.json 里 pending 的 TO_AGENT 节点 id 列表。"""
         path = self._break_to_agent_path()
         if not path.exists():
             return []
@@ -570,7 +577,7 @@ class Runner:
         ctx = _Ctx(self.artifacts, depths=self._depths)
 
         # TO_AGENT 节点:不调 run,产物由外部 agent 写入 output_dir
-        # 首次跑(无产物文件):emit checkpoint + 设 PAUSED + 写 _break_to_agent.json,进程由主循环退出
+        # 首次跑(无产物文件):emit checkpoint + 设 PAUSED + 写 .esflow/break_to_agent.json,进程由主循环退出
         # --resume(有产物文件):扫文件构造 artifact + deliver 校验 + 转 DONE,跑下游
         # TO_AGENT 也走 accept:校验前置 + 可在 accept 里设 self.output_dir 指向业务目录(work_dir),
         # 框架尊重节点自定义 output_dir,否则 fallback 到 job_dir/rid
@@ -595,7 +602,7 @@ class Runner:
             node.output_dir.mkdir(parents=True, exist_ok=True)
             files = [
                 f.name for f in node.output_dir.iterdir()
-                if f.name != _ARTIFACT_FILE and not f.name.startswith(".")
+                if not f.name.startswith(".")
             ]
             artifact = {"output_dir": str(node.output_dir), "files": sorted(files)}
             # TO_AGENT 语义:deliver 校验 agent 是否已写产物
@@ -713,7 +720,7 @@ class Runner:
                     st.status = NodeStatus.IDLE
                     st.artifact = None
                 # 清磁盘 artifact.json,防止下次启动加载到旧产物
-                art_file = self.job_dir / s2 / _ARTIFACT_FILE
+                art_file = self._meta_path(s2, _ARTIFACT_FILE)
                 art_file.unlink(missing_ok=True)
             self.state.status = JobStatus.RUNNING
         elif ctrl.kind == "abort":
@@ -758,7 +765,7 @@ class Runner:
         等 resume 信号才转 idle 重新就绪执行——用于 view 在指定节点前停下来观察。
 
         TO_AGENT 节点(checkpoint=Checkpoint.TO_AGENT)就绪时不调 run,
-        emit checkpoint(artifact=上游产物集合)+ 写 _break_to_agent.json + 主循环退出。
+        emit checkpoint(artifact=上游产物集合)+ 写 .esflow/break_to_agent.json + 主循环退出。
         外部 agent 写产物文件到 output_dir 后,用 --resume 续跑:
         框架扫文件构造 artifact={"output_dir", "files"},调 deliver 校验,通过则转 DONE。
         """

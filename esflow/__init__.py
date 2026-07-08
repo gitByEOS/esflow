@@ -40,6 +40,12 @@ from .loader import load_flow, FlowLoadError
 from .runner import Runner, BreakKind
 from .check import pass_check, CheckResult, FlowCheckError
 
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("esflow")
+except Exception:  # 未安装时(开发模式 import)兜底
+    __version__ = "0.0.0"
+
 __all__ = [
     "JobEvent",
     "trace",
@@ -68,4 +74,5 @@ __all__ = [
     "pass_check",
     "CheckResult",
     "FlowCheckError",
+    "__version__",
 ]

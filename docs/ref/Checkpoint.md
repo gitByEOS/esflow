@@ -70,7 +70,7 @@ class AgentSummary(Node):
 
 节点不实现 `run`。链路:
 
-1. `esflow run <flow> --out <path>` → 跑到 TO_AGENT 节点 emit checkpoint(artifact=上游产物集合),写 `_break_to_agent.json`,进程退出(exit 2)
+1. `esflow run <flow> --out <path>` → 跑到 TO_AGENT 节点 emit checkpoint(artifact=上游产物集合),写 `.esflow/break_to_agent.json`,进程退出(exit 2)
 2. 外部 agent 读 stderr 拿上游产物 → 写产物文件到 `<path>/<to_agent 节点>/`
 3. `esflow run --resume <path>` → 框架扫文件构造 `artifact={"output_dir", "files"}` + `deliver` 校验 + 转 DONE + 跑下游
 

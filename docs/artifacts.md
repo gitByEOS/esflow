@@ -42,7 +42,7 @@ class Export(Node):
 节点 `done` 或 `skipped` 后,框架写入:
 
 ```text
-<run_id>/artifact.json
+<job_dir>/.esflow/<run_id>/artifact.json
 ```
 
 它保存的是 `run()` 返回值(skip 节点为 `null`):
@@ -73,7 +73,7 @@ esflow run ./my_flow --out ./runs/video-a
 并在节点完成后写:
 
 ```text
-./runs/video-a/<run_id>/artifact.json
+./runs/video-a/.esflow/<run_id>/artifact.json
 ```
 
 ## --from
@@ -121,12 +121,12 @@ agent 契约(零 JSON):
 
 1. `esflow run <flow> --out <path>` 跑到 TO_AGENT 节点,进程退出(exit 2),stderr 打印上游产物 + 产物目录路径
 2. 外部 agent 读 stderr 拿上游产物 → 写产物文件到 `<path>/<to_agent 节点>/`(如 `summary.txt`)
-3. `esflow run --resume <path>` → 框架扫该节点 `output_dir` 下文件(排除 `artifact.json` 和隐藏文件),构造 `artifact = {"output_dir": <str>, "files": [< filenames >]}`,调 `deliver` 校验,通过则落盘 `artifact.json` + 转 DONE + 跑下游
+3. `esflow run --resume <path>` → 框架扫该节点 `output_dir` 下文件(排除隐藏文件),构造 `artifact = {"output_dir": <str>, "files": [< filenames >]}`,调 `deliver` 校验,通过则落盘 `artifact.json` + 转 DONE + 跑下游
 
-`_break_to_agent.json`:
+`.esflow/break_to_agent.json`:
 
-首次跑到 TO_AGENT 节点时,框架在 `<path>/_break_to_agent.json` 写 `{"pending": ["<节点 id>", ...]}`,记录未完成的 TO_AGENT 节点。`--resume` 完成节点后从 pending 移除,空了删文件。
+首次跑到 TO_AGENT 节点时,框架在 `<path>/.esflow/break_to_agent.json` 写 `{"pending": ["<节点 id>", ...]}`,记录未完成的 TO_AGENT 节点。`--resume` 完成节点后从 pending 移除,空了删文件。
 
-防误跑:`--out` 目录有 `_break_to_agent.json` 时不带 `--resume` 直接报错退出,避免 agent 未完成就 silently 跑下游。
+防误跑:`--out` 目录有 `.esflow/break_to_agent.json` 时不带 `--resume` 直接报错退出,避免 agent 未完成就 silently 跑下游。
 
 详见 [ref/Checkpoint.md](ref/Checkpoint.md#用法---to_agentagent-介入)。

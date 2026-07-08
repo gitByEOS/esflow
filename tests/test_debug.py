@@ -18,6 +18,7 @@ from esflow.event import JobEvent
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
 ARTIFACT_FILE = runner_mod._ARTIFACT_FILE
+META_DIR = runner_mod.ESFLOW_META_DIR
 
 
 def _drive(runner: Runner, only: set[str] | None = None) -> list[JobEvent]:
@@ -60,14 +61,14 @@ def _debug_root(monkeypatch, tmp_path: Path) -> Path:
 
 
 def test_debug_persists_artifacts(monkeypatch, tmp_path: Path):
-    """debug 跑完后,每节点 output_dir 下有 artifact.json。"""
+    """debug 跑完后,每节点 .esflow/<rid>/ 下有 artifact.json。"""
     _debug_root(monkeypatch, tmp_path)
     runner = Runner.load(str(EXAMPLE), debug=True)
     _drive(runner)
 
     assert runner.debug is True
     for rid in ("fetch", "process", "review", "export"):
-        art_file = runner.job_dir / rid / ARTIFACT_FILE
+        art_file = runner.job_dir / META_DIR / rid / ARTIFACT_FILE
         assert art_file.exists(), f"{rid} 缺 artifact.json"
         json.loads(art_file.read_text(encoding="utf-8"))
 
@@ -134,7 +135,7 @@ def test_debug_retry_clears_downstream_artifact(monkeypatch, tmp_path: Path):
     assert calls.count("export") == 1
     assert runner.state.status == "done"
     # 磁盘产物是最新一次的
-    art = json.loads((runner.job_dir / "review" / ARTIFACT_FILE).read_text(encoding="utf-8"))
+    art = json.loads((runner.job_dir / META_DIR / "review" / ARTIFACT_FILE).read_text(encoding="utf-8"))
     assert art is not None
 
 
@@ -172,7 +173,7 @@ def test_debug_skipped_node_persists_none(monkeypatch, tmp_path: Path):
     assert runner.state.status == "done"
     assert runner.artifacts["up"] is None
 
-    up_art = runner.job_dir / "up" / ARTIFACT_FILE
+    up_art = runner.job_dir / META_DIR / "up" / ARTIFACT_FILE
     assert up_art.exists()
     assert json.loads(up_art.read_text(encoding="utf-8")) is None
 
@@ -192,7 +193,7 @@ def test_debug_clear_wipes_artifacts(monkeypatch, tmp_path: Path):
     first = Runner.load(str(EXAMPLE), debug=True)
     _drive(first)
     assert first.state.status == "done"
-    assert (first.job_dir / "fetch" / ARTIFACT_FILE).exists()
+    assert (first.job_dir / META_DIR / "fetch" / ARTIFACT_FILE).exists()
 
     # clear_debug 后磁盘清空
     cleared = Runner.load(str(EXAMPLE), debug=True)
@@ -204,7 +205,7 @@ def test_debug_clear_wipes_artifacts(monkeypatch, tmp_path: Path):
     _drive(cleared)
     assert calls == ["fetch", "process", "review", "export"]
     assert cleared.state.status == "done"
-    assert (cleared.job_dir / "fetch" / ARTIFACT_FILE).exists()
+    assert (cleared.job_dir / META_DIR / "fetch" / ARTIFACT_FILE).exists()
 
 
 def test_clear_debug_noop_for_run_mode(tmp_path: Path):
