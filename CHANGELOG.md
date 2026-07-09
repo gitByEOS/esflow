@@ -2,6 +2,14 @@
 
 本项目遵循语义化版本思路。`0.x` 阶段 API 仍可能调整,破坏性变更会在对应版本中说明。
 
+## 0.1.4
+
+### 改进
+
+- `run.py` 生成模板支持 `--out` / `--resume`,TO_AGENT 续跑命令复用同一 job 目录
+- `node_args` 写入 job metadata 并在 resume 自动继承;库式传入同名字段可覆盖
+- `run_flow_script --resume` 默认不调用 `node_args_builder`,避免默认参数污染首跑入参
+
 ## 0.1.3
 
 ### 改进

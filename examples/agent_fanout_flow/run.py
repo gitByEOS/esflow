@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""直接跑:python3 examples/agent_fanout_flow/run.py [--n N]
+"""直接跑:python3 examples/agent_fanout_flow/run.py [--n N] [--out DIR] [--resume DIR]
 
 启动前 pass_check 预检(必须在 git 仓库内),--n 通过环境变量传给 split 节点。
 """
@@ -8,11 +8,9 @@ import argparse
 import asyncio
 import os
 import subprocess
-import sys
 from pathlib import Path
 
-from esflow import Runner, esflow_event
-from esflow.check import pass_check
+from esflow import run_flow_script
 
 
 def check_git_repo() -> str | None:
@@ -30,15 +28,18 @@ def check_git_repo() -> str | None:
 async def main():
     parser = argparse.ArgumentParser(description="扇出 N 个 subagent 审查 git 改动")
     parser.add_argument("--n", type=int, default=5, help="审查最近 N 条 commit(默认 5)")
-    args = parser.parse_args()
 
-    pass_check(check_git_repo)
-    os.environ["GIT_REVIEW_N"] = str(args.n)
+    def apply_args(args):
+        os.environ["GIT_REVIEW_N"] = str(args.n)
+        return None
 
-    runner = Runner.load(str(Path(__file__).parent))
-    async for event in runner.run():
-        esflow_event(event)
+    return await run_flow_script(
+        Path(__file__).parent,
+        checks=(check_git_repo,),
+        parser=parser,
+        node_args_builder=apply_args,
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

@@ -48,6 +48,7 @@ ESFLOW_META_DIR = ".esflow"
 _ARTIFACT_FILE = "artifact.json"
 _BREAK_TO_AGENT_FILE = "break_to_agent.json"
 _FLOW_DIR_FILE = "flow_dir.txt"
+_NODE_ARGS_FILE = "node_args.json"
 
 
 def _error_from_exc(run_id: str, msg: str, exc: Exception) -> JobEvent:
@@ -240,7 +241,8 @@ class Runner:
             node.depth = d
         # 节点入参注入:node_args = {base_id: kwargs_dict},匹配 base 与所有副本(base#i)
         # 动态副本在 _expand_fanout 创建时从 self._node_args 继承 base 的入参
-        self._node_args: dict[str, dict[str, Any]] = node_args or {}
+        self._node_args = self._merge_node_args(node_args)
+        self._persist_node_args()
         for base, kw in self._node_args.items():
             for rid, node in self.runs.items():
                 if rid == base or rid.startswith(base + "#"):
@@ -270,6 +272,47 @@ class Runner:
     def _meta_path(self, *parts: str) -> Path:
         """框架元数据根:job_dir/.esflow/ 下拼接子路径。"""
         return self.job_dir.joinpath(ESFLOW_META_DIR, *parts)
+
+    def _load_node_args(self) -> dict[str, dict[str, Any]]:
+        """从 job metadata 找回首跑入参;坏文件按无入参处理。"""
+        path = self._meta_path(_NODE_ARGS_FILE)
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {
+            str(node_id): dict(kwargs)
+            for node_id, kwargs in data.items()
+            if isinstance(kwargs, dict)
+        }
+
+    def _merge_node_args(
+        self,
+        node_args: dict[str, dict[str, Any]] | None,
+    ) -> dict[str, dict[str, Any]]:
+        """metadata 入参为底,本次传入字段覆盖同名字段。"""
+        merged = self._load_node_args()
+        for node_id, kwargs in (node_args or {}).items():
+            if not isinstance(kwargs, dict):
+                continue
+            base = merged.setdefault(str(node_id), {})
+            base.update(kwargs)
+        return merged
+
+    def _persist_node_args(self) -> None:
+        """把有效节点入参写入 job metadata,不污染 artifact.json。"""
+        if not self._node_args:
+            return
+        path = self._meta_path(_NODE_ARGS_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self._node_args, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
 
     def clear_debug(self) -> None:
         """debug 模式:清空 job_dir 下持久化产物,下次 run 从头跑。非 debug 无操作。"""

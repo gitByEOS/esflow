@@ -74,6 +74,8 @@ class AgentSummary(Node):
 2. 外部 agent 读 stderr 拿上游产物 → 写产物文件到 `<path>/<to_agent 节点>/`
 3. `esflow run --resume <path>` → 框架扫文件构造 `artifact={"output_dir", "files"}` + `deliver` 校验 + 转 DONE + 跑下游
 
+skill 生成模板里的 `run.py` 也支持同样链路:`python scripts/run.py --out <path>` 首跑,提示里的 `python scripts/run.py --resume <path>` 续跑。
+
 agent 契约零 JSON:只读 stderr + 写产物文件,不碰 artifact.json。
 
 ## 两种暂停点来源

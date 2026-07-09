@@ -28,6 +28,7 @@ class Node:
     depth: int = 0
     output_dir: Path = Path()
     fanout_payload: Any = None
+    kwargs: dict[str, Any] | None = None
 
     def accept(self, ctx: DepthScope) -> bool: ...
     def deliver(self, artifact: Any) -> bool: ...
@@ -51,6 +52,7 @@ class Node:
 | `depth` | Runner 初始化 | 拓扑深度(入口 0) |
 | `output_dir` | 节点就绪时 | 业务产物目录,默认 `Path()`,框架 fallback 到 `job_dir/<run_id>`;只装节点业务产物,框架元数据(`artifact.json`)隔离到 `job_dir/.esflow/<run_id>/`。`TO_AGENT` 节点可在 `accept` 设为业务目录,框架尊重不覆盖 |
 | `fanout_payload` | 动态扇出展开时 | 动态扇出载荷(仅 dynamic base 副本有) |
+| `kwargs` | Runner 初始化 | `Runner.load(node_args=...)` 注入的业务入参;有 `job_dir` 时首跑写入 `.esflow/node_args.json`,resume 自动继承 |
 
 ## 方法
 

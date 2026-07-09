@@ -39,12 +39,13 @@ from .state import JobState, RunState, NodeStatus, apply_event
 from .loader import load_flow, FlowLoadError
 from .runner import Runner, BreakKind
 from .check import pass_check, CheckResult, FlowCheckError
+from .entrypoint import run_flow_script
 
 try:
     from importlib.metadata import version as _pkg_version
     __version__ = _pkg_version("esflow")
 except Exception:  # 未安装时(开发模式 import)兜底
-    __version__ = "0.0.0"
+    __version__ = "0.1.4"
 
 __all__ = [
     "JobEvent",
@@ -74,5 +75,6 @@ __all__ = [
     "pass_check",
     "CheckResult",
     "FlowCheckError",
+    "run_flow_script",
     "__version__",
 ]

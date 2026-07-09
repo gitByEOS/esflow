@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +15,7 @@ import pytest
 import esflow.htmlview as htmlview_mod
 import esflow.runner as runner_mod
 from esflow.cli import _handle_checkpoint_command, cmd_debug, cmd_new, main
+from esflow.entrypoint import run_flow_script
 from esflow.runner import Runner
 
 
@@ -65,6 +69,94 @@ def test_new_generates_runnable_template(tmp_path: Path, monkeypatch) -> None:
     assert runner.state.status == "done"
     assert "html 大小" in runner.artifacts["report"]["summary"]
     assert (Path(runner.artifacts["report"]["report_path"])).exists()
+
+
+def test_new_template_runpy_supports_out_and_resume(tmp_path: Path, monkeypatch) -> None:
+    """cli new 生成的 scripts/run.py 默认支持 --out 与 --resume。"""
+    monkeypatch.chdir(tmp_path)
+    rc = main(["new", "demo_skill"])
+    assert rc == 0
+
+    scripts = tmp_path / "demo_skill" / "scripts"
+    out_dir = tmp_path / "run"
+    env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parent.parent
+    env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
+
+    first = subprocess.run(
+        [sys.executable, str(scripts / "run.py"), "--out", str(out_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert first.returncode == 0, first.stderr
+    assert (out_dir / runner_mod.ESFLOW_META_DIR / "report" / runner_mod._ARTIFACT_FILE).exists()
+
+    second = subprocess.run(
+        [sys.executable, str(scripts / "run.py"), "--resume", str(out_dir)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert second.returncode == 0, second.stderr
+
+
+def test_run_flow_script_resume_does_not_apply_builder_defaults(tmp_path: Path) -> None:
+    """resume 默认只继承 metadata,不让 builder 默认值覆盖首跑入参。"""
+    flow_dir = tmp_path / "args_flow"
+    (flow_dir / "nodes").mkdir(parents=True)
+    (flow_dir / "flow.py").write_text(
+        "from esflow import flow\n"
+        "@flow(id='args_flow')\n"
+        "class F:\n"
+        "    nodes=['export']\n"
+        "    edges=[]\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "export.py").write_text(
+        "from esflow import Node\n"
+        "class Export(Node):\n"
+        "    id='export'\n"
+        "    def run(self, ctx):\n"
+        "        return {'out': self.kwargs.get('out')}\n",
+        encoding="utf-8",
+    )
+
+    out_dir = tmp_path / "run"
+    calls: list[str] = []
+
+    def build_node_args(args):
+        calls.append("called")
+        return {"export": {"out": "default-out"}}
+
+    rc = asyncio.run(
+        run_flow_script(
+            flow_dir,
+            node_args_builder=build_node_args,
+            argv=["--out", str(out_dir)],
+        )
+    )
+    assert rc == 0
+    assert calls == ["called"]
+
+    meta = out_dir / runner_mod.ESFLOW_META_DIR / runner_mod._NODE_ARGS_FILE
+    meta.write_text('{"export": {"out": "first-out"}}', encoding="utf-8")
+    calls.clear()
+
+    rc = asyncio.run(
+        run_flow_script(
+            flow_dir,
+            node_args_builder=build_node_args,
+            argv=["--resume", str(out_dir)],
+        )
+    )
+
+    assert rc == 0
+    assert calls == []
+    assert '"first-out"' in meta.read_text(encoding="utf-8")
+    assert '"default-out"' not in meta.read_text(encoding="utf-8")
 
 
 def test_checkpoint_short_commands() -> None:

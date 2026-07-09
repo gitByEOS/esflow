@@ -26,10 +26,11 @@ fetch -> process -> review -> export
 
 ```bash
 esflow new my_skill
-python my_skill/scripts/run.py
+python my_skill/scripts/run.py --out ./runs/a
+python my_skill/scripts/run.py --resume ./runs/a
 ```
 
-`esflow new` 生成的脚手架带 `run.py`,内含 `pass_check` 预检与 skill 专属配置,用 `python run.py` 跑;纯 flow 目录(无 skill 包装)直接 `esflow run <dir>` 跑,详见 [cli.md](cli.md)。
+`esflow new` 生成的模板带 `run.py`,内含 `pass_check` 预检与 skill 专属配置,并默认支持 `--out` / `--resume`;纯 flow 目录(无 skill 包装)直接 `esflow run <dir>` 跑,详见 [cli.md](cli.md)。
 
 生成目录(`scripts/` 那一层就是 `Runner.load` 的入口,loader 只认 `flow.py` + `nodes/` 同级):
 

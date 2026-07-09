@@ -4,17 +4,16 @@
 环境变量 OCR_BASE 指定 OCR 服务地址,默认 http://localhost:11434(ollama 默认端口)。
 
 跑:
-    python examples/ocr_flow/run.py
+    python examples/ocr_flow/run.py [--out DIR] [--resume DIR]
     OCR_BASE=http://<host>:<port> python examples/ocr_flow/run.py
 """
 
 import asyncio
 import os
-import sys
 from pathlib import Path
 
-from esflow import Runner, esflow_event
-from esflow.check import CheckResult, FlowCheckError, pass_check
+from esflow import run_flow_script
+from esflow.check import CheckResult
 
 OCR_BASE = os.environ.get("OCR_BASE", "http://localhost:11434")
 
@@ -51,16 +50,10 @@ def check_image_lib() -> CheckResult | None:
 
 
 async def main() -> int:
-    try:
-        pass_check(check_ocr_service, check_image_lib)
-    except FlowCheckError as exc:
-        print(exc, file=sys.stderr)
-        return 1
-
-    runner = Runner.load(str(Path(__file__).parent))
-    async for event in runner.run():
-        esflow_event(event)
-    return 0 if runner.state.status != "error" else 1
+    return await run_flow_script(
+        Path(__file__).parent,
+        checks=(check_ocr_service, check_image_lib),
+    )
 
 
 if __name__ == "__main__":

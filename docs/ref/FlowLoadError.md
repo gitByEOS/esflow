@@ -53,14 +53,14 @@ my_flow/
     worker.py    # 定义 Node 子类(静态 replicas 或 dynamic 由 FanOut 展开)
 ```
 
-`esflow new my_skill` 生成的脚手架多套一层 `scripts/`,并把加载入口写到 `run.py` 里:
+`esflow new my_skill` 生成的目录多套一层 `scripts/`,并把加载入口写到 `run.py` 里:
 
 ```text
 my_skill/
   SKILL.md
   scripts/        # ← Runner.load("./my_skill/scripts") 加载这一层
     flow.py
-    run.py        # 调 Runner.load(str(Path(__file__).parent)) 跑起来
+    run.py        # 通过 run_flow_script 跑起来
     nodes/
       fetch.py
       analyze.py

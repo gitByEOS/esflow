@@ -142,7 +142,7 @@ class Node:
     # 动态扇出载荷,框架注入第 i 份任务(仅 dynamic base 副本有)
     fanout_payload: Any = None
     # 节点入参,Runner.load(node_args=...) 注入;skill 节点统一从 self.kwargs 读 CLI 参数
-    # resume 时由 skill 显式重传,框架不持久化(输入非产物,不进 artifact.json)
+    # 首跑写入 job metadata,resume 自动继承;输入非产物,不进 artifact.json
     # 默认 None,_instantiate 后保证是独立 dict(避免类属性可变默认值共享陷阱)
     kwargs: dict[str, Any] | None = None
 

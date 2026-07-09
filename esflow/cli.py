@@ -330,7 +330,7 @@ class Report(Node):
 '''
 
 _RUN_PY = '''#!/usr/bin/env python3
-"""直接跑:python3 scripts/run.py
+"""直接跑:python3 scripts/run.py [--out DIR] [--resume DIR]
 
 启动前 pass_check 预检,任一失败聚合抛 FlowCheckError,不启动 runner。
 """
@@ -339,8 +339,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-from esflow import Runner, esflow_event
-from esflow.check import pass_check
+from esflow import run_flow_script
 
 
 def check_python_version() -> str | None:
@@ -351,14 +350,14 @@ def check_python_version() -> str | None:
 
 
 async def main():
-    pass_check(check_python_version)
-    runner = Runner.load(str(Path(__file__).parent))
-    async for event in runner.run():
-        esflow_event(event)
+    return await run_flow_script(
+        Path(__file__).parent,
+        checks=(check_python_version,),
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))
 '''
 
 

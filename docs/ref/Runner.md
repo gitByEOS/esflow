@@ -24,7 +24,7 @@ runner = Runner.load("./my_flow", node_args={"resolve": {"input": "x"}})
 
 `Runner.load(flow_dir, output_root=DEFAULT_OUTPUT_ROOT, debug=False, job_dir=None, node_args=None)`
 
-`node_args` 是 `{base_id: kwargs_dict}`,注入到 base 与所有副本的 `Node.kwargs`,不持久化(resume 时显式重传)。
+`node_args` 是 `{base_id: kwargs_dict}`,注入到 base 与所有副本的 `Node.kwargs`。有 `job_dir` 时会写入 `.esflow/node_args.json`,resume 自动继承;本次传入字段覆盖已持久化字段。
 
 ### 实例属性
 
@@ -45,7 +45,7 @@ runner = Runner.load("./my_flow", node_args={"resolve": {"input": "x"}})
 | `--out DIR` | `DIR/`(无 job_id 层) | 显式持久目录,不清理 |
 | debug | `DEBUG_OUTPUT_ROOT/<flow_id>/`(固定) | `/tmp/esflow/debug`,累积复用 |
 
-全持久化:所有 flow 都落盘 `artifact.json` 到 `job_dir/.esflow/<run_id>/`,所有 flow 都能 `--resume` / `from_node` / `from_depth`。默认 `/tmp` 根享受自动清理,要长期保留就显式 `--out`。节点业务产物落 `job_dir/<run_id>/`,框架元数据隔离到 `job_dir/.esflow/`。
+全持久化:所有 flow 都落盘 `artifact.json` 到 `job_dir/.esflow/<run_id>/`,输入 metadata 写到 `job_dir/.esflow/node_args.json`。所有 flow 都能 `--resume` / `from_node` / `from_depth`。默认 `/tmp` 根享受自动清理,要长期保留就显式 `--out`。节点业务产物落 `job_dir/<run_id>/`,框架元数据隔离到 `job_dir/.esflow/`。
 
 ## run(...)
 
@@ -127,7 +127,7 @@ checkpoint 暂停时外部调用,唤醒等待中的 `run()`:
 - **并行**:同一轮就绪节点 `asyncio.gather`,同步 `run` 用 `asyncio.to_thread` 包
 - **拓扑深度**:`depth(node) = 1 + max(depth(upstream))`,入口 0,同层 depth 相同
 - **serial**:同轮就绪节点中属于 `serial` 的,只启动 `nodes` 顺序最靠前的那个,其他等下一轮(用于 fallback 兜底链,详见 [`FlowDefine`](FlowDefine.md))
-- **产物持久化**:全持久化,所有 flow 都落盘 `artifact.json` 到 `.esflow/<run_id>/`。默认 `/tmp` 根享受自动清理,详见 [../artifacts.md](../artifacts.md)
+- **产物持久化**:全持久化,所有 flow 都落盘 `artifact.json` 到 `.esflow/<run_id>/`;`node_args` 作为输入 metadata 写到 `.esflow/node_args.json`。默认 `/tmp` 根享受自动清理,详见 [../artifacts.md](../artifacts.md)
 - **动态扩图**:节点 `run` 返回 [`FanOut`](FanOut.md) 时,框架创建 N 个副本、改写边、重建邻接表
 
 ## 模块常量

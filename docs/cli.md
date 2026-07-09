@@ -10,14 +10,14 @@
 | `run` | `--node X [Y ...]` | `runner.run(only={X, Y, ...})` | 只跑指定节点及其必需上游 |
 | `run` | `--from NODE` | `runner.run(from_node="NODE")` | 从 NODE 起续跑到末端,上游从 `--out` 目录复用 |
 | `run` | `--from-depth N` | `runner.run(from_depth=N)` | 重跑 depth>=N 的所有节点,上游 depth<N 从 `--out` 复用 |
-| `run` | `--out DIR` | `Runner.load(FLOW_DIR, job_dir=Path(DIR))` | 指定产物目录,节点产物写入 `DIR/<node>/artifact.json` |
-| `run` | `--resume DIR` | `Runner.load(flow_dir, job_dir=DIR)` + `runner.run(resume=True)` | 续跑 TO_AGENT 节点:框架扫产物文件构造 artifact + `deliver` 校验,跑下游。flow_dir 从 `DIR/_flow_dir.txt` 找回 |
+| `run` | `--out DIR` | `Runner.load(FLOW_DIR, job_dir=Path(DIR))` | 指定产物目录,节点业务产物写入 `DIR/<node>/`,框架元数据写入 `DIR/.esflow/` |
+| `run` | `--resume DIR` | `Runner.load(flow_dir, job_dir=DIR)` + `runner.run(resume=True)` | 续跑 TO_AGENT 节点:框架扫产物文件构造 artifact + `deliver` 校验,跑下游。flow_dir 从 `DIR/.esflow/flow_dir.txt` 找回 |
 | `debug` | `FLOW_DIR`(位置参数) | `Runner.load(FLOW_DIR, debug=True)` | flow 目录路径 |
 | `debug` | `--node X [Y ...]` | `runner.run(nodes={X, Y, ...}, break_before={X, Y, ...})` | 单点调试:上游从 debug 目录复用,在指定节点前暂停等 resume |
 | `debug` | `--clear` | `runner.clear_debug()` | 清空 debug 目录持久化产物后从头跑 |
 | `view` | `FLOW_DIR`(位置参数) | `Runner.load(FLOW_DIR)` | flow 目录路径,浏览器界面 |
 | `new` | `NAME`(位置参数) | —— | 生成 skill 模板(含可跑 demo flow) |
-| 非 CLI | `python scripts/run.py` | `Runner.load + run + esflow_event`(+ 可选 `pass_check`) | skill 自定义启动逻辑,脚手架生成 |
+| 非 CLI | `python scripts/run.py [--out DIR] [--resume DIR]` | `run_flow_script(...)` | skill 自定义启动逻辑,由 `esflow new` 生成 |
 
 ## 仅库式,无 CLI flag
 
@@ -69,6 +69,8 @@ CLI 的磁盘预检(`runner.missing_upstream`)只在持久化模式触发:
 | 跑到 agent 节点退出,等 AI 介入 | `esflow run ./flow --out ./runs/a`(`TO_AGENT` 节点) |
 | agent 写产物后续跑下游 | `esflow run --resume ./runs/a` |
 | 生成新 skill 模板 | `esflow new my_skill` |
+
+`esflow new` 生成的 `scripts/run.py` 默认支持 `--out` 和 `--resume`,首跑传一次 `--out` 后,TO_AGENT 提示会给出同一个 `job_dir` 的续跑命令。`--resume` 默认只继承 `.esflow/node_args.json`,不把 parser 默认业务参数重新写回 metadata。
 
 ## 相关
 

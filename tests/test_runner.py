@@ -17,6 +17,7 @@ from esflow.loader import load_flow, FlowLoadError
 EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "quickstart_flow"
 OCR_EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "ocr_flow"
 ARTIFACT_FILE = runner_mod._ARTIFACT_FILE
+NODE_ARGS_FILE = runner_mod._NODE_ARGS_FILE
 META_DIR = runner_mod.ESFLOW_META_DIR
 
 
@@ -920,8 +921,8 @@ def test_node_args_inherited_by_dynamic_replicas(tmp_path: Path):
     assert [m["task"] for m in merged] == [1, 2, 3]
 
 
-def test_node_args_not_persisted(tmp_path: Path):
-    """node_args 是输入非产物,不进 artifact.json;resume 时 skill 显式重传。"""
+def test_node_args_persisted_as_job_metadata_not_artifact(tmp_path: Path):
+    """node_args 是输入 metadata,不进 artifact.json;resume 可自动继承。"""
     flow_dir = tmp_path / "args_flow"
     (flow_dir / "nodes").mkdir(parents=True)
     (flow_dir / "flow.py").write_text(
@@ -949,6 +950,115 @@ def test_node_args_not_persisted(tmp_path: Path):
     art = json.loads((out_dir / META_DIR / "a" / ARTIFACT_FILE).read_text(encoding="utf-8"))
     assert art == {"v": 42}
     assert "kwargs" not in art
+    meta = json.loads((out_dir / META_DIR / NODE_ARGS_FILE).read_text(encoding="utf-8"))
+    assert meta == {"a": {"v": 42}}
+
+    resumed = Runner.load(str(flow_dir), job_dir=out_dir)
+    assert resumed.runs["a"].kwargs == {"v": 42}
+
+
+def test_node_args_resume_without_repassing_out(tmp_path: Path):
+    """首跑传 export.out 后,--resume 不重传 node_args 仍写到同一业务 out。"""
+    flow_dir = tmp_path / "agent_args_flow"
+    export_dir = tmp_path / "business_out"
+    (flow_dir / "nodes").mkdir(parents=True)
+    (flow_dir / "flow.py").write_text(
+        "from esflow import flow, edge\n"
+        "@flow(id='agent_args_flow')\n"
+        "class F:\n"
+        "    nodes=['fetch', 'agent_summary', 'export']\n"
+        "    edges=[edge('fetch','agent_summary'), edge('agent_summary','export')]\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "fetch.py").write_text(
+        "from esflow import Node\n"
+        "class Fetch(Node):\n"
+        "    id='fetch'\n"
+        "    def run(self, ctx):\n"
+        "        return {'text': 'hello'}\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "agent_summary.py").write_text(
+        "from esflow import Node, Checkpoint\n"
+        "class AgentSummary(Node):\n"
+        "    id='agent_summary'\n"
+        "    checkpoint=Checkpoint.TO_AGENT\n"
+        "    def deliver(self, artifact):\n"
+        "        return 'summary.txt' in artifact.get('files', [])\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "export.py").write_text(
+        "from pathlib import Path\n"
+        "from esflow import Node\n"
+        "class Export(Node):\n"
+        "    id='export'\n"
+        "    def run(self, ctx):\n"
+        "        out = Path(self.kwargs['out'])\n"
+        "        out.mkdir(parents=True, exist_ok=True)\n"
+        "        report = out / 'weather_report.md'\n"
+        "        report.write_text(ctx.get('agent_summary')['files'][0], encoding='utf-8')\n"
+        "        return {'report': str(report)}\n",
+        encoding="utf-8",
+    )
+
+    job_dir = tmp_path / "run"
+    first = Runner.load(
+        str(flow_dir),
+        job_dir=job_dir,
+        node_args={"export": {"out": str(export_dir)}},
+    )
+    _drive_no_resume(first)
+    (job_dir / "agent_summary" / "summary.txt").write_text("摘要", encoding="utf-8")
+
+    second = Runner.load(str(flow_dir), job_dir=job_dir)
+    events: list[JobEvent] = []
+
+    async def drive_second():
+        async for ev in second.run(resume=True):
+            events.append(ev)
+
+    asyncio.run(drive_second())
+
+    assert [e.type for e in events][-1] == "end"
+    assert second.runs["export"].kwargs == {"out": str(export_dir)}
+    assert second.artifacts["export"]["report"] == str(export_dir / "weather_report.md")
+    assert (export_dir / "weather_report.md").read_text(encoding="utf-8") == "summary.txt"
+
+
+def test_node_args_resume_overrides_persisted_fields(tmp_path: Path):
+    """本次 node_args 只覆盖同名字段,未传字段继续继承 metadata。"""
+    flow_dir = tmp_path / "args_override_flow"
+    (flow_dir / "nodes").mkdir(parents=True)
+    (flow_dir / "flow.py").write_text(
+        "from esflow import flow\n"
+        "@flow(id='args_override_flow')\n"
+        "class F:\n"
+        "    nodes=['a']\n"
+        "    edges=[]\n",
+        encoding="utf-8",
+    )
+    (flow_dir / "nodes" / "a.py").write_text(
+        "from esflow import Node\n"
+        "class A(Node):\n"
+        "    id='a'\n"
+        "    def run(self, ctx):\n"
+        "        return dict(self.kwargs)\n",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "run"
+    Runner.load(
+        str(flow_dir),
+        job_dir=out_dir,
+        node_args={"a": {"x": 1, "y": 2}},
+    )
+
+    runner = Runner.load(
+        str(flow_dir),
+        job_dir=out_dir,
+        node_args={"a": {"y": 3}},
+    )
+
+    assert runner.runs["a"].kwargs == {"x": 1, "y": 3}
 
 
 def test_to_agent_resume_after_agent_writes_files(tmp_path: Path):

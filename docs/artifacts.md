@@ -56,6 +56,8 @@ class Export(Node):
 
 下游通过 `ctx.get("upstream_id")` 读取上游 artifact。文件本体由节点自己读写,框架只负责保存 artifact 的 JSON 结构。
 
+`node_args` 不写入 `artifact.json`。有 `job_dir` 时,框架把首跑入参写到 `<job_dir>/.esflow/node_args.json`,resume 自动读回;库式本次传入的 `node_args` 只做覆盖。
+
 ## --out
 
 `--out` 指定一次运行的完整产物目录:
@@ -126,6 +128,8 @@ agent 契约(零 JSON):
 `.esflow/break_to_agent.json`:
 
 首次跑到 TO_AGENT 节点时,框架在 `<path>/.esflow/break_to_agent.json` 写 `{"pending": ["<节点 id>", ...]}`,记录未完成的 TO_AGENT 节点。`--resume` 完成节点后从 pending 移除,空了删文件。
+
+`<path>/.esflow/node_args.json` 会保留首跑注入的业务入参,所以 skill 的 `run.py --resume` 默认只传 job 目录,不重复生成业务入参默认值。
 
 防误跑:`--out` 目录有 `.esflow/break_to_agent.json` 时不带 `--resume` 直接报错退出,避免 agent 未完成就 silently 跑下游。
 
