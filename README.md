@@ -39,9 +39,19 @@
 
 ## 安装
 
+Python 包:
+
 ```bash
 pip install esflow
 ```
+
+Skill 版:
+
+```bash
+npx skills add https://github.com/gitByEOS/open-part-skills --skill esflow
+```
+
+> Skill 版本 除了包含如何使用，还有需求如何拆解描述，使用方式：/esflow 按照 prd.md 帮我实现 skill
 
 ## 快速开始
 
